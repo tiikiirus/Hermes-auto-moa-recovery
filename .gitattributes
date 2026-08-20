@@ -1,0 +1,11 @@
+# Preserve recovery artifacts byte-for-byte across Windows clones.
+restore-auto-moa-after-update.bat -text
+auto-moa-router-source-20260820.patch -text
+auto-moa-moa-section.yaml -text
+SHA256SUMS.txt -text
+
+# Documentation stays normalized.
+README.md text eol=lf
+USER_GUIDE_RU.txt text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
