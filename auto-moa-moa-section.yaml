@@ -1,0 +1,146 @@
+moa:
+  presets:
+    default:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: max
+        enabled: true
+      aggregator:
+        provider: nous
+        model: tencent/hy3:free
+        reasoning_effort: max
+      degraded_reference_policy: loud
+      fanout: user_turn
+    code_logic_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: tencent/hy3:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: poolside/laguna-xs-2.1:free
+        reasoning_effort: max
+        enabled: true
+      aggregator:
+        provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: max
+      degraded_reference_policy: loud
+      fanout: user_turn
+    logic_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: max
+        enabled: true
+      aggregator:
+        provider: nous
+        model: tencent/hy3:free
+        reasoning_effort: max
+      degraded_reference_policy: loud
+      fanout: user_turn
+    code_visual_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: tencent/hy3:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: poolside/laguna-xs-2.1:free
+        reasoning_effort: max
+        enabled: true
+      aggregator:
+        provider: nous
+        model: stepfun/step-3.7-flash:free
+        reasoning_effort: max
+      degraded_reference_policy: loud
+      fanout: user_turn
+    logic_visual_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: tencent/hy3:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: max
+        enabled: true
+      aggregator:
+        provider: nous
+        model: stepfun/step-3.7-flash:free
+        reasoning_effort: max
+      degraded_reference_policy: loud
+      fanout: user_turn
+    auto_moa:
+      auto_route:
+        code: code_logic_deep
+        logic: logic_deep
+        code_visual: code_visual_deep
+        logic_visual: logic_visual_deep
+        fallback: default
+        context_messages: 8
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: tencent/hy3:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: max
+        enabled: true
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: max
+        enabled: true
+      aggregator:
+        provider: nous
+        model: stepfun/step-3.7-flash:free
+        reasoning_effort: max
+      degraded_reference_policy: loud
+      fanout: user_turn
+  default_preset: default
+  save_traces: true
+  privacy_filter: display
