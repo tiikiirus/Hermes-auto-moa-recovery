@@ -24,6 +24,7 @@
 | `auto-moa-router-source-20260820.patch` | Полный source patch auto-router/runtime/CLI/Desktop/Ink TUI/tests |
 | `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph |
 | `SHA256SUMS.txt` | Контроль целостности трёх recovery-артефактов |
+| `USER_GUIDE_RU.txt` | Подробная русская инструкция, копия файла с рабочего стола |
 
 BAT переносим: он ищет patch и YAML **рядом с собой** через `%~dp0`.
 

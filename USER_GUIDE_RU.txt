@@ -1,0 +1,168 @@
+AUTO_MOA — ВОССТАНОВЛЕНИЕ ПОСЛЕ ОБНОВЛЕНИЯ HERMES
+=================================================
+
+ЗАЧЕМ НУЖЕН ЭТОТ СКРИПТ
+-----------------------
+Наш auto_moa — локальная доработка исходного кода Hermes. Она автоматически
+выбирает подходящий MoA preset для кода, логики, изображений и UI-задач.
+
+Обычное обновление Hermes может:
+  • сохранить доработку через Git stash;
+  • либо изменить те же файлы и сделать старую доработку несовместимой.
+
+Скрипт безопасно проверяет текущее состояние и восстанавливает auto_moa,
+если сохранённый patch совместим с новой версией. Принудительное или частичное
+применение при конфликте не выполняется.
+
+
+ГДЕ ТЕПЕРЬ ХРАНИТСЯ ВОССТАНОВЛЕНИЕ
+----------------------------------
+Каноническая копия находится в отдельном локальном Git-репозитории:
+
+C:\Users\tiki\Documents\Hermes-auto-moa-recovery
+
+Внутри находятся BAT, source patch, MoA config backup, SHA-256 checksums и
+подробный README.md. Начальный snapshot сохранён Git commit-ом.
+
+Дополнительная однофайловая копия всей Git-истории:
+
+C:\Users\tiki\Documents\Hermes-auto-moa-recovery.bundle
+
+Важно: репозиторий и bundle пока находятся на этом же диске и не имеют remote.
+Они защищают от случайного изменения/удаления отдельных файлов, но не от
+поломки диска. Для внешнего backup позже можно скопировать `.bundle` в облако
+или подключить приватный Git remote.
+
+
+КОГДА ЗАПУСКАТЬ
+---------------
+Запускай скрипт после каждого обновления Hermes — даже если auto_moa визуально
+остался на месте. Скрипт проверит код, конфигурацию и интерфейсы.
+
+
+ОБЫЧНЫЙ РЕКОМЕНДУЕМЫЙ ЗАПУСК
+----------------------------
+1. Полностью закрой Hermes Desktop.
+
+   Зачем: запущенный backend продолжает использовать старый код, а открытый
+   Desktop может мешать пересборке файлов интерфейса.
+
+2. Открой PowerShell.
+
+3. Для профиля default выполни:
+
+   & "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" default
+
+   Для профиля aiqa замени последнее слово default на aiqa.
+
+4. Не закрывай окно. Дождись завершения проверок и сообщения:
+
+   [auto_moa] SUCCESS.
+
+5. Закрой PowerShell и снова запусти Hermes Desktop.
+
+6. В выборе модели укажи:
+
+   Mixture of Agents → auto_moa
+
+Сам auto_moa остаётся opt-in: он работает только когда выбран этот preset.
+Ручной выбор default/code_logic_deep/logic_deep/visual presets по-прежнему
+обходит автоматический router.
+
+
+ЧТО ДЕЛАЕТ СКРИПТ
+-----------------
+1. Проверяет, не восстановлен ли source patch уже.
+   Если восстановлен — повторно его не накладывает.
+
+2. Если patch отсутствует, сначала делает безопасный dry-run.
+
+3. Применяет patch только если Git подтверждает совместимость.
+
+4. Проверяет и при необходимости восстанавливает MoA graph профиля aiqa.
+   Перед изменением config.yaml создаётся резервная копия:
+
+   config.yaml.before-auto-moa-restore.bak
+
+5. Запускает focused Python tests.
+
+6. Пересобирает и проверяет Ink TUI и Hermes Desktop UI.
+
+7. НЕ отправляет реальные запросы моделям Nous и не расходует inference.
+
+
+БЫСТРЫЙ РЕЖИМ
+-------------
+Если нужно только быстро проверить/восстановить patch и конфигурацию без тестов
+и сборки интерфейсов, выполни одну из команд.
+
+В PowerShell обязательно поставь оператор вызова & перед путём:
+
+& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" --quick
+
+В обычном cmd.exe оператор & не нужен:
+
+"C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" --quick
+
+После крупного обновления лучше использовать обычный запуск. Режим --quick
+не доказывает, что новый Hermes совместим со всеми изменениями интерфейсов.
+
+
+ИСПОЛЬЗОВАНИЕ В ДРУГОМ ПРОФИЛЕ
+------------------------------
+Код auto_moa общий для всех профилей, но MoA presets хранятся отдельно в
+config.yaml каждого профиля. Чтобы установить наш набор presets в другой
+профиль, передай его имя первым аргументом.
+
+PowerShell:
+
+& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" default
+
+cmd.exe:
+
+"C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" default
+
+Почему возникла ошибка UnexpectedToken: в PowerShell строка в кавычках сама по
+себе считается текстом. Оператор & говорит PowerShell запустить этот путь как
+команду и передать следующее слово default как аргумент.
+
+Важно: если в другом профиле отсутствует наш auto_moa graph, скрипт заменит его
+секцию moa сохранённой секцией из aiqa. Старый config этого профиля сначала
+сохранится рядом как config.yaml.before-auto-moa-restore.bak.
+
+
+ЧТО ОЗНАЧАЮТ ОСНОВНЫЕ РЕЗУЛЬТАТЫ
+--------------------------------
+[auto_moa] SUCCESS.
+  Всё восстановлено и проверки завершились. Перезапусти Desktop/backend.
+
+source patch is already applied.
+  Обновление уже сохранило код auto_moa. Скрипт только проверит остальное.
+
+restoring MoA graph...
+  Конфигурация auto_moa пропала или стала неполной; скрипт восстановил её
+  из backup и сохранил предыдущий config.yaml.
+
+ERROR: patch is incompatible with the updated source tree.
+  Новая версия Hermes изменила те же участки кода. Скрипт ничего частично
+  не применил. Не используй git reset/force/--reject. Скопируй весь текст
+  ошибки и передай Hermes для ручной адаптации patch.
+
+ERROR: ... tests/build failed.
+  Patch применён, но проверка новой версии не прошла. Не считай auto_moa
+  рабочим до разбора ошибки. Скопируй вывод окна и передай Hermes.
+
+
+НЕ УДАЛЯТЬ
+----------
+Не удаляй папку и bundle:
+
+C:\Users\tiki\Documents\Hermes-auto-moa-recovery
+C:\Users\tiki\Documents\Hermes-auto-moa-recovery.bundle
+
+Внутри Git-репозитория особенно важны:
+
+restore-auto-moa-after-update.bat
+auto-moa-router-source-20260820.patch
+auto-moa-moa-section.yaml
+SHA256SUMS.txt
