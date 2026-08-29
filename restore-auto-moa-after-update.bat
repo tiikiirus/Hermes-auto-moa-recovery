@@ -48,14 +48,14 @@ git apply --check "%PATCH%" >nul 2>&1
 if not errorlevel 1 (
   echo [auto_moa] applying source patch...
   git apply --whitespace=nowarn "%PATCH%" || goto :apply_failed
-  goto :patch_verified
+  goto :patch_applied
 )
 
 git apply --3way --check "%PATCH%" >nul 2>&1
 if not errorlevel 1 (
   echo [auto_moa] applying source patch with 3-way merge...
   git apply --3way "%PATCH%" || goto :apply_failed
-  goto :patch_verified
+  goto :patch_applied
 )
 
 echo [auto_moa] ERROR: patch is incompatible with the updated source tree.
@@ -63,9 +63,13 @@ echo [auto_moa] No files were changed by this script.
 echo [auto_moa] Resolve manually using: %PATCH%
 goto :conflict
 
-:patch_verified
+:patch_applied
 git apply --reverse --check "%PATCH%" >nul 2>&1 || goto :reverse_check_failed
 git diff --check || goto :diff_failed
+goto :profile_verified
+
+:patch_verified
+goto :profile_verified
 
 if defined AUTO_MOA_SKIP_PROFILE goto :profile_verified
 set "CONFIG_PATH="
@@ -105,7 +109,7 @@ if "%QUICK%"=="1" goto :success
 set "PYTHON=%REPO%\venv\Scripts\python.exe"
 if not exist "!PYTHON!" set "PYTHON=python"
 echo [auto_moa] running focused Python tests...
-"!PYTHON!" -m pytest tests/agent/test_moa_auto_router.py tests/agent/test_moa_auto_runtime.py tests/hermes_cli/test_moa_config.py tests/hermes_cli/test_moa_cmd_auto.py tests/hermes_cli/test_moa_set_models_preserves_extra_keys.py tests/tui_gateway/test_moa_reference_emit.py tests/cli/test_moa_command.py -q || goto :python_tests_failed
+"!PYTHON!" -m pytest tests/agent/test_moa_auto_router.py tests/agent/test_moa_route_relay.py tests/hermes_cli/test_moa_config.py tests/hermes_cli/test_moa_auto_route.py -q || goto :python_tests_failed
 
 where npm >nul 2>&1 || goto :missing_npm
 echo [auto_moa] rebuilding and testing Ink TUI...

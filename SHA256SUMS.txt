@@ -1,3 +1,3 @@
-4eec219785bf3bbcb02d31d1e34b2ff5ddf80a086844cf57d41792b3344003d7 *restore-auto-moa-after-update.bat
+bfb36376bdbaed30bddbbaa91cf19cc8c3c295306d1f8586e0c36f6c8b48775c *restore-auto-moa-after-update.bat
 a6cb4a2eb347beddcb0b72a9ba52a35c64feb18c18276381acbe8d66a7737745 *auto-moa-router-source-20260820.patch
 e2fb2e325d4a14432985059908d3a87d5e586bfba7609b0d80f896961509afd8 *auto-moa-moa-section.yaml
