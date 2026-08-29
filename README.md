@@ -46,6 +46,28 @@ hermes-update --check
 hermes-update --repair
 ```
 
+### Выбор пресета
+
+```powershell
+/model moa:auto_moa
+```
+
+### Что делает auto-MoA
+
+| Запрос | Куда маршрутизируется |
+|---|---|
+| «напиши функцию», «рефакторинг» | `code_logic_deep` |
+| «объясни», «почему», «сравни» | `logic_deep` |
+| «покажи график», «нарисуй» | `code_visual_deep` |
+| «проанализируй скриншот» | `logic_visual_deep` |
+| Непонятно / follow-up | `default` |
+
+### При проблемах
+
+1. `hermes-update --check` — покажет, сломано или нет
+2. `hermes-update --repair` — починит
+3. Если не помогло — запусти `install-auto-moa.bat` заново
+
 ## Как это работает
 
 ```
