@@ -27,7 +27,7 @@ set "RECOVERY=%USERPROFILE%\Documents\Hermes-auto-moa-recovery"
 set "PATCH=%RECOVERY%\auto-moa-current.patch"
 set "HOOK_SRC=%RECOVERY%\auto-moa-hook.sh"
 set "WATCHDOG=%RECOVERY%\auto-moa-watchdog.bat"
-set "HERMES_UPDATE=%LOCALAPPDATA%\hermes\hermes-update.bat"
+set "HERMES_UPDATE=%LOCALAPPDATA%\hermes\bin\hermes-update.bat"
 
 echo ===========================================================================
 echo  Auto-MoA Self-Healing Installer
