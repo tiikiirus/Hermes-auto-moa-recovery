@@ -192,10 +192,21 @@ index 000000000..916f93af6
 +    reason = f"auto route → {category}"
 +    return AutoRouteDecision(preset=preset, category=category, reason=reason)
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index d783afd99..c5b2b8366 100644
+index d783afd99..e9ba215de 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
-@@ -1551,6 +1551,7 @@ class MoAChatCompletions:
+@@ -19,6 +19,10 @@ from typing import Any
+ 
+ from agent.auxiliary_client import call_llm
+ from agent.message_content import flatten_message_text
++from agent.moa_auto_router import (
++    _active_turn_visual_parts,
++    _restore_active_turn_visual_parts,
++)
+ from agent.transports import get_transport
+ 
+ logger = logging.getLogger(__name__)
+@@ -1551,6 +1555,7 @@ class MoAChatCompletions:
          #                        acts; phase="reference" mirrors ``moa.progress``
          #                        so listeners can rely on a single event family)
          #   "moa.aggregating" kwargs: aggregator (label), ref_count
@@ -203,7 +214,7 @@ index d783afd99..c5b2b8366 100644
          # Never raises into the model call — display is best-effort.
          self.reference_callback = reference_callback
          # Back-reference to the owning AIAgent, so the reference fan-out can
-@@ -1608,6 +1609,14 @@ class MoAChatCompletions:
+@@ -1608,6 +1613,14 @@ class MoAChatCompletions:
          # Normalized moa.privacy_filter mode for the current turn ('' |
          # 'display' | 'full'), refreshed from config on every create().
          self._privacy_mode: str = ""
@@ -218,7 +229,7 @@ index d783afd99..c5b2b8366 100644
  
      def consume_reference_usage(self) -> tuple[Any, Any]:
          """Pop pending reference-fan-out usage + cost, resetting both to empty.
-@@ -1707,6 +1716,7 @@ class MoAChatCompletions:
+@@ -1707,6 +1720,7 @@ class MoAChatCompletions:
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output,
                  aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -226,7 +237,7 @@ index d783afd99..c5b2b8366 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1720,7 +1730,7 @@ class MoAChatCompletions:
+@@ -1720,7 +1734,7 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -235,7 +246,7 @@ index d783afd99..c5b2b8366 100644
          """Run the advisor fan-out and return the exact aggregator request.
  
          The normal agent loop needs to measure this augmented prompt before its
-@@ -1728,7 +1738,11 @@ class MoAChatCompletions:
+@@ -1728,7 +1742,11 @@ class MoAChatCompletions:
          when the loop supplies the returned private object back to ``create()``,
          the advisor fan-out is not repeated.
          """
@@ -248,7 +259,7 @@ index d783afd99..c5b2b8366 100644
  
      def rebase_prepared_request(
          self, prepared: dict[str, Any], messages: list[dict[str, Any]]
-@@ -1742,6 +1756,10 @@ class MoAChatCompletions:
+@@ -1742,6 +1760,10 @@ class MoAChatCompletions:
          """
          guidance = prepared.get("guidance")
          agg_messages = [dict(message) for message in messages]
@@ -259,7 +270,7 @@ index d783afd99..c5b2b8366 100644
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
          return {**prepared, "messages": agg_messages}
-@@ -1898,6 +1916,7 @@ class MoAChatCompletions:
+@@ -1898,6 +1920,7 @@ class MoAChatCompletions:
          return _agg_response
  
      def create(self, **api_kwargs: Any) -> Any:
@@ -267,7 +278,7 @@ index d783afd99..c5b2b8366 100644
          prepared_request = api_kwargs.pop("_moa_prepared_request", None)
          if prepared_request is not None:
              if not isinstance(prepared_request, dict):
-@@ -1905,34 +1924,117 @@ class MoAChatCompletions:
+@@ -1905,34 +1928,119 @@ class MoAChatCompletions:
              return self._call_prepared_aggregator(prepared_request, api_kwargs)
  
          from hermes_cli.config import get_config_path, load_config
@@ -351,6 +362,8 @@ index d783afd99..c5b2b8366 100644
 +            )
 +        if isinstance(auto_route, dict):
 +            from agent.moa_auto_router import (
++                _active_turn_visual_parts,
++                _restore_active_turn_visual_parts,
 +                auto_route_turn_fingerprint,
 +                select_auto_moa_route,
 +            )
@@ -412,7 +425,7 @@ index d783afd99..c5b2b8366 100644
          # Privacy filter mode: '' (off, default) | 'display' | 'full'. See
          # coerce_privacy_filter / the pattern block at the top of this module.
          # Remembered on self so _call_prepared_aggregator (which may run on a
-@@ -2185,10 +2287,20 @@ class MoAChatCompletions:
+@@ -2185,10 +2293,20 @@ class MoAChatCompletions:
              else:
                  _trace_refs = list(reference_outputs)
              self._pending_trace = {
@@ -434,7 +447,7 @@ index d783afd99..c5b2b8366 100644
              }
              # Derived from the same privacy-redacted _trace_refs, so an active
              # privacy mode redacts the observability payload too.
-@@ -2290,7 +2402,7 @@ class MoAChatCompletions:
+@@ -2290,7 +2408,7 @@ class MoAChatCompletions:
                  joined = f"{joined}\n\n{degraded}" if joined else degraded
              guidance = (
                  "[Mixture of Agents reference context]\n"
@@ -443,7 +456,7 @@ index d783afd99..c5b2b8366 100644
                  f"Aggregator/acting model: {_slot_label(aggregator)}\n"
                  f"References: {', '.join(label for label, _, _ in _agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
-@@ -2417,6 +2529,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
+@@ -2417,6 +2535,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
                      moa_refs_done=kwargs.get("refs_done"),
                      moa_refs_total=kwargs.get("refs_total"),
                  )
