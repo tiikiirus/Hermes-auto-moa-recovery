@@ -1,0 +1,1011 @@
+diff --git a/agent/conversation_loop.py b/agent/conversation_loop.py
+index 56397d950..96af8d8dc 100644
+--- a/agent/conversation_loop.py
++++ b/agent/conversation_loop.py
+@@ -2582,7 +2582,10 @@ def run_conversation(
+             if _moa_prepared_request is None:
+                 _prepare_moa_request = getattr(_moa_completions, "prepare", None)
+                 if callable(_prepare_moa_request):
+-                    _moa_prepared_request = _prepare_moa_request(api_messages)
++                    _moa_prepared_request = _prepare_moa_request(
++                        api_messages,
++                        turn_id=turn_id,
++                    )
+             if _moa_prepared_request is not None:
+                 api_messages = _moa_prepared_request["messages"]
+ 
+diff --git a/agent/moa_auto_router.py b/agent/moa_auto_router.py
+new file mode 100644
+index 000000000..916f93af6
+--- /dev/null
++++ b/agent/moa_auto_router.py
+@@ -0,0 +1,171 @@
++"""Auto-MoA route selection helpers.
++
++These helpers let a virtual ``auto_moa`` preset resolve to a concrete
++preset per user turn, based on the current message content.  The router
++is intentionally lightweight: it does not fan out references itself, it
++only chooses which preset ``MoAChatCompletions.create()`` should use for
++the current turn.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++_VISUAL_PART_TYPES = {
++    "image",
++    "image_url",
++    "input_image",
++    "input_video",
++    "video",
++    "video_url",
++}
++
++
++def _active_turn_visual_parts(
++    messages: list[dict[str, Any]],
++    context_messages: int = 8,
++) -> list[dict[str, Any]]:
++    """Copy current/recent user visual blocks for compression rebases."""
++    conversation = [
++        message
++        for message in messages
++        if message.get("role") in {"user", "assistant"}
++    ][-(max(1, context_messages) + 1) :]
++    visual_parts: list[dict[str, Any]] = []
++    for message in conversation:
++        if message.get("role") != "user":
++            continue
++        content = message.get("content")
++        content_parts = (
++            [content]
++            if isinstance(content, dict)
++            else content
++            if isinstance(content, (list, tuple))
++            else []
++        )
++        for part in content_parts:
++            if (
++                isinstance(part, dict)
++                and str(part.get("type") or "").lower() in _VISUAL_PART_TYPES
++                and part not in visual_parts
++            ):
++                visual_parts.append(dict(part))
++    return visual_parts
++
++
++def _restore_active_turn_visual_parts(
++    messages: list[dict[str, Any]],
++    visual_parts: Any,
++) -> None:
++    """Restore omitted active-turn pixels to the acting aggregator transcript."""
++    if not isinstance(visual_parts, list) or not visual_parts:
++        return
++    parts = [dict(part) for part in visual_parts if isinstance(part, dict)]
++    if not parts:
++        return
++    for index in range(len(messages) - 1, -1, -1):
++        message = messages[index]
++        if message.get("role") != "user":
++            continue
++        content = message.get("content")
++        if isinstance(content, list):
++            existing = list(content)
++        elif isinstance(content, str):
++            existing = [{"type": "text", "text": content}]
++        elif content is None:
++            existing = []
++        else:
++            existing = [content]
++        message["content"] = [
++            *existing,
++            *(part for part in parts if part not in existing),
++        ]
++        return
++    messages.append({"role": "user", "content": parts})
++
++
++def auto_route_turn_fingerprint(messages: list[dict[str, Any]]) -> str:
++    """Return a stable fingerprint for the current user turn."""
++    import hashlib
++    import json
++
++    user_messages = [
++        message for message in messages if message.get("role") == "user"
++    ]
++    last_user = user_messages[-1] if user_messages else {}
++    try:
++        payload = json.dumps(last_user, sort_keys=True, default=str)
++    except (TypeError, ValueError):
++        payload = str(last_user)
++    return hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest()
++
++
++class AutoRouteDecision:
++    """Resolved auto-route target for one user turn."""
++
++    __slots__ = ("preset", "category", "reason")
++
++    def __init__(self, preset: str, category: str, reason: str) -> None:
++        self.preset = preset
++        self.category = category
++        self.reason = reason
++
++
++def select_auto_moa_route(
++    messages: list[dict[str, Any]],
++    auto_route: dict[str, Any],
++    previous_category: str | None = None,
++) -> AutoRouteDecision:
++    """Pick a concrete preset for the current user turn.
++
++    The routing table is a mapping from category keywords to preset names.
++    ``auto_route`` is the raw ``auto_route`` block from a preset config.
++    """
++    if not isinstance(auto_route, dict):
++        return AutoRouteDecision(
++            preset=str(auto_route.get("fallback") or "default"),
++            category="fallback",
++            reason="invalid auto_route block",
++        )
++
++    last_user = next(
++        (
++            message
++            for message in reversed(messages)
++            if message.get("role") == "user"
++        ),
++        {},
++    )
++    text = str(last_user.get("content") or "")
++    if isinstance(last_user.get("content"), list):
++        text = " ".join(
++            part.get("text", "")
++            for part in last_user["content"]
++            if isinstance(part, dict) and part.get("type") == "text"
++        )
++
++    lowered = text.lower()
++    category = "fallback"
++    preset = str(auto_route.get("fallback") or "default")
++
++    if previous_category == "logic" and "logic" in lowered:
++        category = "logic"
++        preset = str(auto_route.get("logic") or preset)
++    elif previous_category == "logic_visual" and any(token in lowered for token in ("image", "chart", "graph", "photo", "screenshot")):
++        category = "logic_visual"
++        preset = str(auto_route.get("logic_visual") or preset)
++    elif any(token in lowered for token in ("image", "chart", "graph", "photo", "screenshot", "visual", "draw", "plot")):
++        category = "code_visual" if any(token in lowered for token in ("plot", "chart", "graph", "visualize", "diagram")) else "logic_visual"
++        preset = str(auto_route.get(category) or auto_route.get("code_visual") or preset)
++    elif any(token in lowered for token in ("code", "function", "script", "program", "implement", "refactor", "bug", "error")):
++        category = "code"
++        preset = str(auto_route.get("code") or preset)
++    elif any(token in lowered for token in ("explain", "why", "reason", "logic", "compare", "analyze", "summarize")):
++        category = "logic"
++        preset = str(auto_route.get("logic") or preset)
++    else:
++        category = "fallback"
++        preset = str(auto_route.get("fallback") or preset)
++
++    reason = f"auto route → {category}"
++    return AutoRouteDecision(preset=preset, category=category, reason=reason)
+diff --git a/agent/moa_loop.py b/agent/moa_loop.py
+index d783afd99..c5b2b8366 100644
+--- a/agent/moa_loop.py
++++ b/agent/moa_loop.py
+@@ -1551,6 +1551,7 @@ class MoAChatCompletions:
+         #                        acts; phase="reference" mirrors ``moa.progress``
+         #                        so listeners can rely on a single event family)
+         #   "moa.aggregating" kwargs: aggregator (label), ref_count
++        #   "moa.route"       kwargs: preset, reason
+         # Never raises into the model call — display is best-effort.
+         self.reference_callback = reference_callback
+         # Back-reference to the owning AIAgent, so the reference fan-out can
+@@ -1608,6 +1609,14 @@ class MoAChatCompletions:
+         # Normalized moa.privacy_filter mode for the current turn ('' |
+         # 'display' | 'full'), refreshed from config on every create().
+         self._privacy_mode: str = ""
++        # Opt-in auto-route state. The requested virtual preset remains stable
++        # (e.g. auto_moa), while these fields expose/cache the concrete preset
++        # selected before the first model call of each user turn.
++        self.last_resolved_preset_name: str = self.preset_name
++        self.last_auto_route_decision: Any = None
++        self._auto_route_turn_sig: str | None = None
++        self._auto_route_turn_decision: Any = None
++        self._auto_route_previous_category: str | None = None
+ 
+     def consume_reference_usage(self) -> tuple[Any, Any]:
+         """Pop pending reference-fan-out usage + cost, resetting both to empty.
+@@ -1707,6 +1716,7 @@ class MoAChatCompletions:
+                 aggregator_input_messages=pending.get("aggregator_input_messages"),
+                 aggregator_output=agg_output,
+                 aggregator_streamed=bool(pending.get("aggregator_streamed")),
++                routing=pending.get("routing"),
+             )
+         except Exception as exc:  # pragma: no cover - tracing must never break a turn
+             logger.debug("MoA trace flush failed: %s", exc)
+@@ -1720,7 +1730,7 @@ class MoAChatCompletions:
+         except Exception as exc:  # pragma: no cover - display must never break the turn
+             logger.debug("MoA reference_callback failed for %s: %s", event, exc)
+ 
+-    def prepare(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
++    def prepare(self, messages: list[dict[str, Any]], *, turn_id: Any = None) -> dict[str, Any]:
+         """Run the advisor fan-out and return the exact aggregator request.
+ 
+         The normal agent loop needs to measure this augmented prompt before its
+@@ -1728,7 +1738,11 @@ class MoAChatCompletions:
+         when the loop supplies the returned private object back to ``create()``,
+         the advisor fan-out is not repeated.
+         """
+-        return self.create(messages=messages, _moa_prepare_only=True)
++        return self.create(
++            messages=messages,
++            _moa_prepare_only=True,
++            _moa_turn_id=turn_id,
++        )
+ 
+     def rebase_prepared_request(
+         self, prepared: dict[str, Any], messages: list[dict[str, Any]]
+@@ -1742,6 +1756,10 @@ class MoAChatCompletions:
+         """
+         guidance = prepared.get("guidance")
+         agg_messages = [dict(message) for message in messages]
++        _restore_active_turn_visual_parts(
++            agg_messages,
++            prepared.get("active_turn_visual_parts"),
++        )
+         if guidance:
+             _attach_reference_guidance(agg_messages, str(guidance))
+         return {**prepared, "messages": agg_messages}
+@@ -1898,6 +1916,7 @@ class MoAChatCompletions:
+         return _agg_response
+ 
+     def create(self, **api_kwargs: Any) -> Any:
++        explicit_turn_id = api_kwargs.pop("_moa_turn_id", None)
+         prepared_request = api_kwargs.pop("_moa_prepared_request", None)
+         if prepared_request is not None:
+             if not isinstance(prepared_request, dict):
+@@ -1905,34 +1924,117 @@ class MoAChatCompletions:
+             return self._call_prepared_aggregator(prepared_request, api_kwargs)
+ 
+         from hermes_cli.config import get_config_path, load_config
+-        from hermes_cli.moa_config import resolve_moa_preset
+-
+-        # Resolve the preset once per (config st_mtime_ns, preset_name).
+-        # resolve_moa_preset re-normalizes + re-validates the whole moa
+-        # config block on every call, and create() runs once per tool-loop
+-        # iteration — a serial cold-start cost before the parallel fan-out
+-        # can begin (#66793). Keyed on the config FILE's mtime_ns (not a
+-        # config-object attribute, which load_config()'s dicts don't carry),
+-        # so a config edit invalidates on the next call.
+-        try:
+-            _cfg_stamp = get_config_path().stat().st_mtime_ns
+-        except OSError:
+-            _cfg_stamp = None
+-        # load_config() is itself (mtime_ns, size)-cached upstream, so this
+-        # read is cheap; the expensive part this cache skips is
+-        # resolve_moa_preset's re-normalization + re-validation.
++        from hermes_cli.moa_config import resolve_moa_preset, validate_moa_payload
++
+         _moa_raw = load_config().get("moa") or {}
+-        preset_cache_key = (_cfg_stamp, self.preset_name)
+-        preset = None
+-        if _cfg_stamp is not None:
+-            with _preset_cache_lock:
+-                preset = _preset_cache.get(preset_cache_key)
+-        if preset is None:
+-            preset = resolve_moa_preset(_moa_raw, self.preset_name)
+-            if _cfg_stamp is not None:
+-                with _preset_cache_lock:
+-                    _preset_cache.clear()  # one live config stamp at a time
+-                    _preset_cache[preset_cache_key] = preset
++        requested_preset = resolve_moa_preset(_moa_raw, self.preset_name)
++        messages = list(api_kwargs.get("messages") or [])
++        preset = requested_preset
++        effective_preset_name = self.preset_name
++        auto_route = requested_preset.get("auto_route")
++        raw_presets = _moa_raw.get("presets")
++        raw_requested_preset = (
++            raw_presets.get(self.preset_name)
++            if isinstance(raw_presets, dict)
++            else _moa_raw
++        )
++        raw_auto_route = (
++            raw_requested_preset.get("auto_route")
++            if isinstance(raw_requested_preset, dict)
++            else None
++        )
++        if (
++            isinstance(raw_requested_preset, dict)
++            and "auto_route" in raw_requested_preset
++        ):
++            route_labels = {self.preset_name}
++            if isinstance(raw_auto_route, dict):
++                route_labels.update(
++                    str(raw_auto_route.get(key) or "").strip()
++                    for key in ("code", "logic", "code_visual", "logic_visual", "fallback")
++                )
++            graph_problems = [
++                problem
++                for problem in validate_moa_payload(_moa_raw)
++                if any(
++                    problem.startswith(f"preset '{label}'")
++                    for label in route_labels
++                    if label
++                )
++            ]
++            if graph_problems:
++                raise RuntimeError(
++                    f"MoA auto preset '{self.preset_name}' has an invalid "
++                    "auto_route graph: " + "; ".join(graph_problems)
++                )
++        if (
++            isinstance(raw_requested_preset, dict)
++            and "auto_route" in raw_requested_preset
++            and not isinstance(auto_route, dict)
++        ):
++            raise RuntimeError(
++                f"MoA auto preset '{self.preset_name}' has an invalid auto_route"
++            )
++        if isinstance(auto_route, dict):
++            from agent.moa_auto_router import (
++                auto_route_turn_fingerprint,
++                select_auto_moa_route,
++            )
++
++            turn_sig = (
++                f"turn-id:{api_kwargs.get('_moa_turn_id')}"
++                if api_kwargs.get("_moa_turn_id") is not None
++                else auto_route_turn_fingerprint(messages)
++            )
++            if turn_sig != self._auto_route_turn_sig:
++                decision = select_auto_moa_route(
++                    messages,
++                    auto_route,
++                    previous_category=self._auto_route_previous_category,
++                )
++                if decision.preset == self.preset_name:
++                    raise RuntimeError(
++                        f"MoA auto preset '{self.preset_name}' cannot route to itself"
++                    )
++                target_preset = resolve_moa_preset(_moa_raw, decision.preset)
++                if target_preset.get("auto_route"):
++                    raise RuntimeError(
++                        f"MoA auto preset '{self.preset_name}' cannot route to "
++                        f"another auto preset '{decision.preset}'"
++                    )
++                if not target_preset.get("enabled", True):
++                    raise RuntimeError(
++                        f"MoA auto preset '{self.preset_name}' cannot route to "
++                        f"disabled preset '{decision.preset}'"
++                    )
++                self._auto_route_turn_sig = turn_sig
++                self._auto_route_turn_decision = decision
++                self._auto_route_previous_category = decision.category
++                self._emit(
++                    "moa.route",
++                    preset=decision.preset,
++                    reason=decision.reason,
++                )
++            else:
++                decision = self._auto_route_turn_decision
++            if decision is None:  # pragma: no cover - defensive state recovery
++                decision = select_auto_moa_route(messages, auto_route)
++            effective_preset_name = decision.preset
++            preset = resolve_moa_preset(_moa_raw, effective_preset_name)
++            if preset.get("auto_route"):
++                raise RuntimeError(
++                    f"MoA auto preset '{self.preset_name}' cannot route to "
++                    f"another auto preset '{decision.preset}'"
++                )
++            if not preset.get("enabled", True):
++                raise RuntimeError(
++                    f"MoA auto preset '{self.preset_name}' cannot route to "
++                    f"disabled preset '{decision.preset}'"
++                )
++            self.last_auto_route_decision = decision
++        else:
++            self.last_auto_route_decision = None
++        self.last_resolved_preset_name = effective_preset_name
+         # Privacy filter mode: '' (off, default) | 'display' | 'full'. See
+         # coerce_privacy_filter / the pattern block at the top of this module.
+         # Remembered on self so _call_prepared_aggregator (which may run on a
+@@ -2185,10 +2287,20 @@ class MoAChatCompletions:
+             else:
+                 _trace_refs = list(reference_outputs)
+             self._pending_trace = {
+-                "preset": self.preset_name,
++                "preset": effective_preset_name,
+                 "reference_outputs": _trace_refs,
+                 "aggregator_slot": aggregator,
+                 "aggregator_temperature": aggregator_temperature,
++                "routing": (
++                    {
++                        "requested_preset": self.preset_name,
++                        "resolved_preset": effective_preset_name,
++                        "category": self.last_auto_route_decision.category,
++                        "reason": self.last_auto_route_decision.reason,
++                    }
++                    if self.last_auto_route_decision is not None
++                    else None
++                ),
+             }
+             # Derived from the same privacy-redacted _trace_refs, so an active
+             # privacy mode redacts the observability payload too.
+@@ -2290,7 +2402,7 @@ class MoAChatCompletions:
+                 joined = f"{joined}\n\n{degraded}" if joined else degraded
+             guidance = (
+                 "[Mixture of Agents reference context]\n"
+-                f"Preset: {self.preset_name}\n"
++                f"Preset: {effective_preset_name}\n"
+                 f"Aggregator/acting model: {_slot_label(aggregator)}\n"
+                 f"References: {', '.join(label for label, _, _ in _agg_refs)}\n\n"
+                 "Use the reference responses below as private context. You are the aggregator and acting model: "
+@@ -2417,6 +2529,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
+                     moa_refs_done=kwargs.get("refs_done"),
+                     moa_refs_total=kwargs.get("refs_total"),
+                 )
++            elif event == "moa.route":
++                cb(
++                    "moa.route",
++                    str(kwargs.get("preset") or ""),
++                    None,
++                    None,
++                    moa_preset=kwargs.get("preset"),
++                    moa_reason=kwargs.get("reason"),
++                )
+             elif event == "moa.aggregating":
+                 cb(
+                     "moa.aggregating",
+diff --git a/agent/moa_trace.py b/agent/moa_trace.py
+index b261c3637..f72aaeb7b 100644
+--- a/agent/moa_trace.py
++++ b/agent/moa_trace.py
+@@ -121,6 +121,7 @@ def save_moa_turn(
+     aggregator_input_messages: Any,
+     aggregator_output: Optional[str],
+     aggregator_streamed: bool,
++    routing: Optional[dict[str, Any]] = None,
+ ) -> None:
+     """Append one full MoA turn record to the session's trace JSONL, if enabled.
+ 
+@@ -176,6 +177,8 @@ def save_moa_turn(
+                 "output_location": _output_location,
+             },
+         }
++        if routing:
++            record["routing"] = dict(routing)
+         with path.open("a", encoding="utf-8") as f:
+             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+     except Exception as exc:  # pragma: no cover - tracing must never break a turn
+diff --git a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
+index 43be63e19..67693e04a 100644
+--- a/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
++++ b/apps/desktop/src/app/session/hooks/use-message-stream/gateway-event/message-stream.ts
+@@ -221,6 +221,23 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
+     return true
+   }
+ 
++  if (event.type === 'moa.route') {
++    if (sessionId) {
++      const preset = coerceGatewayText(payload?.preset) || 'default'
++      const reason = coerceGatewayText(payload?.reason)
++      const text = `◇ Auto MoA → ${preset}${reason ? ` — ${reason}` : ''}\n`
++
++      appendReasoningDelta(sessionId, text, true, occurredAt)
++      flushQueuedDeltas(sessionId)
++    }
++
++    if (isActiveEvent) {
++      setPetActivity({ reasoning: true })
++    }
++
++    return true
++  }
++
+   if (event.type === 'moa.reference') {
+     // MoA reference-model output — surface as a labelled thinking chunk
+     // (tagged with the source model) before the aggregator's response, so
+diff --git a/cli.py b/cli.py
+index 7d5aec9f5..67f5237f7 100644
+--- a/cli.py
++++ b/cli.py
+@@ -14467,6 +14467,22 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
+             self._spinner_text = f"◆ aggregating ({agg})" if agg else "◆ aggregating"
+             self._invalidate()
+             return
++        if event_type == "moa.route":
++            preset = kwargs.get("moa_preset") or "default"
++            reason = kwargs.get("moa_reason") or ""
++            self._pending_moa_route_line = f"◇ Auto MoA → {preset}" + (f" — {reason}" if reason else "") + "\n"
++            try:
++                self._flush_reasoning_preview(force=True)
++            except Exception:
++                pass
++            if self._pending_moa_route_line:
++                try:
++                    self._emit_reasoning_preview(self._pending_moa_route_line)
++                except Exception:
++                    if self._pending_moa_route_line.strip():
++                        _cprint(f"  {_DIM}{self._pending_moa_route_line.strip()}{_RST}")
++            self._invalidate()
++            return
+ 
+         # Feed the pet: tools mean "running" (not reasoning); a failed tool
+         # latches the turn so it ends on a sulk.
+diff --git a/hermes_cli/moa_config.py b/hermes_cli/moa_config.py
+index 24d36e4a1..02486771c 100644
+--- a/hermes_cli/moa_config.py
++++ b/hermes_cli/moa_config.py
+@@ -23,6 +23,14 @@ DEFAULT_MOA_AGGREGATOR: dict[str, str] = {
+ 
+ DEFAULT_MOA_REFERENCE_TIMEOUT: float | None = None
+ 
++AUTO_ROUTE_TARGET_KEYS = (
++    "code",
++    "logic",
++    "code_visual",
++    "logic_visual",
++    "fallback",
++)
++
+ 
+ def _default_reference_models() -> list[dict[str, Any]]:
+     return [{**slot, "enabled": True} for slot in deepcopy(DEFAULT_MOA_REFERENCE_MODELS)]
+@@ -76,10 +84,10 @@ def _coerce_int(value: Any, default: int) -> int:
+         return default
+     try:
+         return int(value)
+-    except (TypeError, ValueError):
++    except (TypeError, ValueError, OverflowError):
+         try:
+             return int(float(value))
+-        except (TypeError, ValueError):
++        except (TypeError, ValueError, OverflowError):
+             return default
+ 
+ 
+@@ -93,10 +101,10 @@ def _coerce_int_or_none(value: Any) -> int | None:
+         return None
+     try:
+         n = int(value)
+-    except (TypeError, ValueError):
++    except (TypeError, ValueError, OverflowError):
+         try:
+             n = int(float(value))
+-        except (TypeError, ValueError):
++        except (TypeError, ValueError, OverflowError):
+             return None
+     return n if n > 0 else None
+ 
+@@ -191,6 +199,22 @@ def _coerce_bool(value: Any, default: bool = True) -> bool:
+     return bool(value)
+ 
+ 
++def _clean_auto_route(value: Any) -> dict[str, Any] | None:
++    """Normalize an opt-in semantic router attached to a virtual preset."""
++    if not isinstance(value, dict):
++        return None
++    targets = {
++        key: str(value.get(key) or "").strip() for key in AUTO_ROUTE_TARGET_KEYS
++    }
++    if any(not target for target in targets.values()):
++        return None
++    targets["context_messages"] = max(
++        1,
++        min(20, _coerce_int(value.get("context_messages"), 8)),
++    )
++    return targets
++
++
+ def _clean_slot(slot: Any, *, include_enabled: bool = False) -> dict[str, Any] | None:
+     if not isinstance(slot, dict):
+         return None
+@@ -267,6 +291,18 @@ def validate_moa_payload(raw: Any) -> list[str]:
+         presets = {DEFAULT_MOA_PRESET_NAME: raw}
+ 
+     problems: list[str] = []
++    canonical_presets: dict[str, Any] = {}
++    for name, preset in presets.items():
++        canonical_name = str(name or "").strip()
++        if not canonical_name:
++            problems.append("preset name must not be blank")
++            continue
++        if canonical_name in canonical_presets:
++            problems.append(
++                f"preset name '{canonical_name}' is duplicated after trimming"
++            )
++        canonical_presets[canonical_name] = preset
++    preset_names = set(canonical_presets)
+     for name, preset in presets.items():
+         label = str(name or "").strip() or "(unnamed)"
+         if not isinstance(preset, dict):
+@@ -290,6 +326,55 @@ def validate_moa_payload(raw: Any) -> list[str]:
+         if agg_issue:
+             problems.append(f"preset '{label}' aggregator: {agg_issue}")
+ 
++        if "auto_route" in preset:
++            auto_route = preset.get("auto_route")
++            if not isinstance(auto_route, dict):
++                problems.append(f"preset '{label}' auto_route: must be an object")
++            else:
++                context_messages = auto_route.get("context_messages", 8)
++                if (
++                    isinstance(context_messages, bool)
++                    or not isinstance(context_messages, int)
++                    or not 1 <= context_messages <= 20
++                ):
++                    problems.append(
++                        f"preset '{label}' auto_route: context_messages must be "
++                        "an integer from 1 to 20"
++                    )
++                for key in AUTO_ROUTE_TARGET_KEYS:
++                    target = str(auto_route.get(key) or "").strip()
++                    if not target:
++                        problems.append(
++                            f"preset '{label}' auto_route: target '{key}' is required"
++                        )
++                    elif target == label:
++                        problems.append(
++                            f"preset '{label}' auto_route target '{key}': "
++                            "cannot route to itself"
++                        )
++                    elif target not in preset_names:
++                        problems.append(
++                            f"preset '{label}' auto_route target '{key}': "
++                            f"preset '{target}' does not exist"
++                        )
++                    else:
++                        target_preset = canonical_presets.get(target)
++                        if (
++                            isinstance(target_preset, dict)
++                            and "auto_route" in target_preset
++                        ):
++                            problems.append(
++                                f"preset '{label}' auto_route target '{key}': "
++                                f"preset '{target}' is itself an auto preset"
++                            )
++                        elif isinstance(target_preset, dict) and not _coerce_bool(
++                            target_preset.get("enabled"), True
++                        ):
++                            problems.append(
++                                f"preset '{label}' auto_route target '{key}': "
++                                f"preset '{target}' is disabled"
++                            )
++
+     return problems
+ 
+ 
+@@ -333,7 +418,7 @@ def _normalize_preset(raw: Any) -> dict[str, Any]:
+ 
+     aggregator = _clean_slot(raw.get("aggregator")) or deepcopy(DEFAULT_MOA_AGGREGATOR)
+ 
+-    return {
++    preset = {
+         "enabled": _coerce_bool(raw.get("enabled"), True),
+         "reference_models": refs,
+         "aggregator": aggregator,
+@@ -367,6 +452,10 @@ def _normalize_preset(raw: Any) -> dict[str, Any]:
+         # {mode: every_n, n: N}, normalized to the canonical string.
+         "fanout": _coerce_fanout(raw.get("fanout")),
+     }
++    auto_route = _clean_auto_route(raw.get("auto_route"))
++    if auto_route is not None:
++        preset["auto_route"] = auto_route
++    return preset
+ 
+ 
+ def normalize_moa_config(raw: Any) -> dict[str, Any]:
+diff --git a/tests/agent/test_moa_auto_router.py b/tests/agent/test_moa_auto_router.py
+new file mode 100644
+index 000000000..9ba079d21
+--- /dev/null
++++ b/tests/agent/test_moa_auto_router.py
+@@ -0,0 +1,132 @@
++"""Tests for the auto-MoA router and ``moa.route`` relay contract."""
++from __future__ import annotations
++
++import pytest
++
++from agent.moa_auto_router import (
++    AutoRouteDecision,
++    auto_route_turn_fingerprint,
++    select_auto_moa_route,
++)
++
++
++def _route(messages, auto_route):
++    return select_auto_moa_route(messages, auto_route)
++
++
++def test_auto_route_selects_code_category_for_code_tokens():
++    decision = _route(
++        [{"role": "user", "content": "refactor the python script"}],
++        {
++            "fallback": "default",
++            "code": "code_preset",
++            "logic": "logic_preset",
++            "code_visual": "plot_preset",
++            "logic_visual": "chart_preset",
++        },
++    )
++    assert decision.preset == "code_preset"
++    assert decision.category == "code"
++    assert decision.reason == "auto route → code"
++
++
++def test_auto_route_selects_logic_category_for_explain_tokens():
++    decision = _route(
++        [{"role": "user", "content": "explain why this fails"}],
++        {
++            "fallback": "default",
++            "code": "code_preset",
++            "logic": "logic_preset",
++            "code_visual": "plot_preset",
++            "logic_visual": "chart_preset",
++        },
++    )
++    assert decision.preset == "logic_preset"
++    assert decision.category == "logic"
++    assert decision.reason == "auto route → logic"
++
++
++def test_auto_route_selects_logic_visual_for_image_tokens():
++    decision = _route(
++        [{"role": "user", "content": "show me the screenshot"}],
++        {
++            "fallback": "default",
++            "code": "code_preset",
++            "logic": "logic_preset",
++            "code_visual": "plot_preset",
++            "logic_visual": "chart_preset",
++        },
++    )
++    assert decision.preset == "chart_preset"
++    assert decision.category == "logic_visual"
++    assert decision.reason == "auto route → logic_visual"
++
++
++def test_auto_route_selects_code_visual_for_chart_tokens():
++    decision = _route(
++        [{"role": "user", "content": "plot the results as a chart"}],
++        {
++            "fallback": "default",
++            "code": "code_preset",
++            "logic": "logic_preset",
++            "code_visual": "plot_preset",
++            "logic_visual": "chart_preset",
++        },
++    )
++    assert decision.preset == "plot_preset"
++    assert decision.category == "code_visual"
++    assert decision.reason == "auto route → code_visual"
++
++
++def test_auto_route_fallback_when_no_tokens_match():
++    decision = _route(
++        [{"role": "user", "content": "hello world"}],
++        {
++            "fallback": "default",
++            "code": "code_preset",
++            "logic": "logic_preset",
++            "code_visual": "plot_preset",
++            "logic_visual": "chart_preset",
++        },
++    )
++    assert decision.preset == "default"
++    assert decision.category == "fallback"
++    assert decision.reason == "auto route → fallback"
++
++
++def test_auto_route_uses_configured_fallback_preset():
++    decision = _route(
++        [{"role": "user", "content": "hello world"}],
++        {
++            "fallback": "balanced",
++            "code": "code_preset",
++            "logic": "logic_preset",
++            "code_visual": "plot_preset",
++            "logic_visual": "chart_preset",
++        },
++    )
++    assert decision.preset == "balanced"
++    assert decision.category == "fallback"
++    assert decision.reason == "auto route → fallback"
++
++
++def test_auto_route_fingerprint_is_deterministic():
++    messages = [{"role": "user", "content": "hello"}]
++    first = auto_route_turn_fingerprint(messages)
++    second = auto_route_turn_fingerprint(messages)
++    assert first == second
++    assert isinstance(first, str)
++    assert len(first) == 64
++
++
++def test_auto_route_fingerprint_changes_with_message_content():
++    first = auto_route_turn_fingerprint([{"role": "user", "content": "hello"}])
++    second = auto_route_turn_fingerprint([{"role": "user", "content": "world"}])
++    assert first != second
++
++
++def test_auto_route_decision_exposes_expected_fields():
++    decision = AutoRouteDecision(preset="x", category="code", reason="auto route → code")
++    assert decision.preset == "x"
++    assert decision.category == "code"
++    assert decision.reason == "auto route → code"
+diff --git a/tests/agent/test_moa_route_relay.py b/tests/agent/test_moa_route_relay.py
+new file mode 100644
+index 000000000..daab8acb1
+--- /dev/null
++++ b/tests/agent/test_moa_route_relay.py
+@@ -0,0 +1,45 @@
++"""Tests for the ``moa.route`` relay contract."""
++from __future__ import annotations
++
++import pytest
++
++from agent.moa_loop import MoAChatCompletions
++
++
++def test_moa_route_relay_payload_contract():
++    """The ``moa.route`` event must preserve preset/reason for frontends."""
++    captured: list[tuple[str, dict]] = []
++
++    def _capture(event: str, **kwargs):
++        captured.append((event, kwargs))
++
++    facade = MoAChatCompletions("auto_moa", reference_callback=_capture)
++    facade._emit("moa.route", preset="code_preset", reason="auto route → code")
++
++    assert captured == [
++        (
++            "moa.route",
++            {
++                "preset": "code_preset",
++                "reason": "auto route → code",
++            },
++        )
++    ]
++
++
++def test_moa_route_relay_defaults_when_payload_missing():
++    """Missing route fields should still reach the callback as safe defaults."""
++    captured: list[tuple[str, dict]] = []
++
++    def _capture(event: str, **kwargs):
++        captured.append((event, kwargs))
++
++    facade = MoAChatCompletions("auto_moa", reference_callback=_capture)
++    facade._emit("moa.route")
++
++    assert captured == [
++        (
++            "moa.route",
++            {},
++        )
++    ]
+diff --git a/tests/hermes_cli/test_moa_auto_route.py b/tests/hermes_cli/test_moa_auto_route.py
+new file mode 100644
+index 000000000..330dd752f
+--- /dev/null
++++ b/tests/hermes_cli/test_moa_auto_route.py
+@@ -0,0 +1,64 @@
++"""Regression: auto_route must survive MoA preset normalization.
++
++The virtual ``auto_moa`` preset carries an ``auto_route`` table that the
++MoA loop reads to resolve a concrete preset per user turn.  ``normalize_moa_config``
++used to rebuild each preset from a fixed field allow-list and silently dropped
++``auto_route``, which made ``MoAChatCompletions.create()`` raise
++``RuntimeError: MoA auto preset 'auto_moa' has an invalid auto_route``.
++"""
++
++from hermes_cli.moa_config import normalize_moa_config, resolve_moa_preset
++
++
++def _sample_raw() -> dict:
++    return {
++        "presets": {
++            "auto_moa": {
++                "auto_route": {
++                    "code": "code_logic_deep",
++                    "logic": "logic_deep",
++                    "code_visual": "code_visual_deep",
++                    "logic_visual": "logic_visual_deep",
++                    "fallback": "default",
++                    "context_messages": 8,
++                },
++                "reference_models": [
++                    {"provider": "nous", "model": "tencent/hy3:free", "enabled": True}
++                ],
++                "aggregator": {"provider": "nous", "model": "stepfun/step-3.7-flash:free"},
++                "enabled": True,
++            },
++            "default": {
++                "reference_models": [
++                    {"provider": "nous", "model": "x", "enabled": True}
++                ],
++                "aggregator": {"provider": "nous", "model": "y"},
++            },
++        }
++    }
++
++
++def test_normalize_moa_config_preserves_auto_route():
++    cfg = normalize_moa_config(_sample_raw())
++    preset = cfg["presets"]["auto_moa"]
++    assert isinstance(preset.get("auto_route"), dict), (
++        "auto_route must survive normalization as a dict"
++    )
++    assert preset["auto_route"]["logic"] == "logic_deep"
++    # nested context_messages should ride along inside auto_route
++    assert preset["auto_route"].get("context_messages") == 8
++
++
++def test_resolve_auto_moa_preset_keeps_auto_route_dict():
++    preset = resolve_moa_preset(_sample_raw(), "auto_moa")
++    assert isinstance(preset.get("auto_route"), dict), (
++        "resolve_moa_preset must return auto_route as a dict for auto_moa"
++    )
++    assert preset["auto_route"]["fallback"] == "default"
++
++
++def test_normalize_drops_non_dict_auto_route():
++    raw = _sample_raw()
++    raw["presets"]["auto_moa"]["auto_route"] = "not-a-dict"
++    cfg = normalize_moa_config(raw)
++    assert cfg["presets"]["auto_moa"].get("auto_route") is None
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 6f0f6ee2e..0a3eca335 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -7736,6 +7736,13 @@ def _on_tool_progress(
+     if event_type == "moa.aggregating":
+         _emit("moa.aggregating", sid, {"aggregator": str(name or "")})
+         return
++    if event_type == "moa.route":
++        route_payload: dict[str, object] = {
++            "preset": str(_kwargs.get("moa_preset") or ""),
++            "reason": str(_kwargs.get("moa_reason") or ""),
++        }
++        _emit("moa.route", sid, route_payload)
++        return
+     if event_type == "moa.progress":
+         # Per-reference completion — drives the status-bar progress indicator
+         # (`MOA: 2/3 refs done`) requested in issue #59546. Only emitted when
+diff --git a/ui-tui/src/app/createGatewayEventHandler.ts b/ui-tui/src/app/createGatewayEventHandler.ts
+index 86a988ed4..e7ca1d3dd 100644
+--- a/ui-tui/src/app/createGatewayEventHandler.ts
++++ b/ui-tui/src/app/createGatewayEventHandler.ts
+@@ -1124,6 +1124,13 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
+ 
+         return
+ 
++      case 'moa.route':
++        const preset = String(ev.payload?.preset ?? 'default')
++        const reason = String(ev.payload?.reason ?? '')
++        turnController.pushActivity(`Auto MoA → ${preset}${reason ? ` — ${reason}` : ''}`, 'info', 'MoA')
++
++        return
++
+       case 'moa.aggregating':
+         // Spinner/status transition only — the aggregator's response follows
+         // through the normal message stream. No committed transcript entry.
+diff --git a/ui-tui/src/gatewayTypes.ts b/ui-tui/src/gatewayTypes.ts
+index 8d13e0f3f..80c562761 100644
+--- a/ui-tui/src/gatewayTypes.ts
++++ b/ui-tui/src/gatewayTypes.ts
+@@ -677,6 +677,11 @@ export type GatewayEvent =
+       session_id?: string
+       type: 'moa.progress'
+     }
++  | {
++      payload?: { preset?: string; reason?: string }
++      session_id?: string
++      type: 'moa.route'
++    }
+   | {
+       payload?: { aggregator?: string; phase?: string; refs_done?: number; refs_total?: number }
+       session_id?: string
