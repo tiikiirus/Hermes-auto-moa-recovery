@@ -1,6 +1,6 @@
-# Hermes `auto_moa` recovery kit
+# Hermes `auto_moa` self-healing recovery kit
 
-Локальный архив полезной opt-in доработки Hermes Agent, которая выбирает MoA preset по типу задачи:
+Локальный архив opt-in доработки Hermes Agent, которая выбирает MoA preset по типу задачи:
 
 - код/репозиторий → `code_logic_deep`;
 - логика/архитектура → `logic_deep`;
@@ -9,62 +9,96 @@
 - неоднозначный короткий follow-up может наследовать предыдущую code/logic категорию;
 - новая самостоятельная задача классифицируется заново.
 
-## Snapshot
+**Ключевое свойство:** этот пакет делает `auto_moa` **устойчивым к `hermes update`** (который делает `reset --hard` и затирает локальные коммиты) и **работает на всех профилях**.
 
-- Дата: `2026-08-29`
-- Базовый Hermes commit: `ac8990b47edca65a9e2ba087bedcb0137e95621f`
-- Репозиторий `hermes-agent` обновлён; legacy patch часто оказывается несовместимым.
-- Скрипт восстановления теперь идемпотентен: при уже восстановленном коде повторно patch не применяется.
-- Реальные Nous/model requests скрипт не запускает.
+## Быстрый старт
+
+### Один раз: установить self-healing
+
+```powershell
+# Обычный пользователь (без admin) — без cronjob:
+& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\install-auto-moa.bat" fantrax
+
+# От администратора — с cronjob (safety net каждые 60 мин):
+# (ПКМ → Запуск от имени администратора)
+& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\install-auto-moa.bat" fantrax
+```
+
+### Каждый раз: обновить Hermes без потери auto-MoA
+
+```powershell
+# Вместо `hermes update`:
+hermes-update
+
+# Или напрямую:
+& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\hermes-update.bat"
+```
+
+### Проверить здоровье
+
+```powershell
+hermes-update --check
+```
+
+### Починить без обновления Hermes
+
+```powershell
+hermes-update --repair
+```
+
+## Как это работает
+
+```
+hermes update (reset --hard origin/main)
+        ↓
+auto-MoA исчезает (коммиты затираются)
+        ↓
+hermes-update.bat автоматически накатывает патч из recovery-проекта
+        ↓
+auto-MoA восстановлен
+```
+
+Патч хранится **вне `.git`** — в recovery-проекте, поэтому не затирается при `reset --hard`.
 
 ## Файлы
 
 | Файл | Назначение |
 |---|---|
-| `restore-auto-moa-after-update.bat` | Идемпотентное восстановление: пропускает patch, если `agent/moa_auto_router.py` уже есть; иначе применяет patch; затем config check, focused tests и UI builds |
-| `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев |
-| `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph |
-| `SHA256SUMS.txt` | Контроль целостности recovery-артефактов |
-| `USER_GUIDE_RU.txt` | Подробная русская инструкция, копия файла с рабочего стола |
+| `auto-moa-current.patch` | Чистый патч против `origin/main` (1011 строк, 9 файлов). Накатывается на свежий `hermes update`. |
+| `auto-moa-hook.sh` | post-merge git hook для ручного `git pull` (не срабатывает при `hermes update`, т.к. тот использует `reset --hard`). |
+| `auto-moa-watchdog.bat` | Скрипт починки: пере-накатывает патч если `auto_moa_router.py` отсутствует или рассинхрон. |
+| `hermes-update.bat` | Обёртка `hermes update` с авто-починкой (`--check`/`--repair`/`update`). |
+| `install-auto-moa.bat` | Установщик: патч + hook + watchdog + cronjob. |
+| `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
+| `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
+| `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph. |
+| `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |
+| `USER_GUIDE_RU.txt` | Подробная русская инструкция. |
 
-BAT переносим: он ищет patch и YAML **рядом с собой** через `%~dp0`.
+## Для всех профилей
 
-## Рекомендуемый запуск после обновления Hermes
+Пакет работает на всех профилях автоматически:
 
-1. Полностью закрыть Hermes Desktop.
-2. Открыть PowerShell.
-3. Для профиля `default` выполнить:
+- `hermes-update.bat` и `auto-moa-watchdog.bat` используют `%LOCALAPPDATA%\hermes\hermes-agent` — не зависят от профиля
+- Cronjob (если установлен) работает на уровне системы
+- Для установки на другой профиль: `install-auto-moa.bat <profile_name>`
 
-```powershell
-& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" default
-```
+## Cronjob (опционально)
 
-Для профиля `aiqa`:
+Устанавливается через `install-auto-moa.bat` от администратора:
 
-```powershell
-& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" aiqa
-```
-
-4. Дождаться `[auto_moa] SUCCESS.` или безопасного сообщения `already restored; skipping patch.`
-5. Перезапустить Desktop/backend и выбрать **Mixture of Agents → `auto_moa`**.
-
-### Быстрый режим
-
-Проверяет/восстанавливает source и config, но пропускает tests/builds:
-
-```powershell
-& "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" default --quick
-```
-
-После крупного update рекомендуется полный запуск без `--quick`.
+- Имя задачи: `AutoMoA-Watchdog`
+- Интервал: каждые 60 минут
+- Действие: запуск `auto-moa-watchdog.bat`
+- Safety net: если `hermes-update.bat` не сработал, cronjob починит в течение часа
 
 ## Безопасность
 
-- Если `agent/moa_auto_router.py` уже присутствует в целевом репозитории, батник завершается как `already restored` и не трогает рабочие файлы.
-- При несовместимом update скрипт завершается с `patch is incompatible` и не применяет patch частично.
-- Не используются `git reset --hard`, `git clean`, `git checkout .` или `git apply --reject`.
-- Перед восстановлением MoA graph сохраняется `config.yaml.before-auto-moa-restore.bak`.
-- При установке в другой профиль его секция `moa` может быть заменена сохранённой секцией из `aiqa`; предыдущий config сначала резервируется.
+- Патч хранится вне `.git` — не затирается при `hermes update`
+- `hermes-update.bat` не меняет `config.yaml` — только накатывает патч
+- Не используются `git reset --hard`, `git clean`, `git checkout .` или `git apply --reject`
+- Перед восстановлением MoA graph сохраняется `config.yaml.before-auto-moa-restore.bak`
+- Реальные Nous/model requests скрипт не запускает
 
 ## Git-архив
 
@@ -77,14 +111,11 @@ git -C "C:\Users\tiki\Documents\Hermes-auto-moa-recovery" status
 git -C "C:\Users\tiki\Documents\Hermes-auto-moa-recovery" log --oneline
 ```
 
-Рядом создаётся `C:\Users\tiki\Documents\Hermes-auto-moa-recovery.bundle` — однофайловая копия Git-истории.
-
 ## После будущей ручной адаптации patch
 
-1. Заменить patch/BAT/YAML актуальными проверенными файлами.
+1. Заменить `auto-moa-current.patch` актуальным проверенным файлом.
 2. Пересчитать `SHA256SUMS.txt`.
 3. Выполнить focused verification.
 4. Зафиксировать новый snapshot отдельным Git commit.
-5. Пересоздать `.bundle`.
 
 Не объявлять новую версию рабочей только потому, что patch применился: обязательны config check и scoped tests.
