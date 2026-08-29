@@ -99,7 +99,7 @@ echo [5/5] Checking for cronjob installer...
 where schtasks >nul 2>&1
 if errorlevel 1 goto :skip_cron
 
-schtasks /create /tn "AutoMoA-Watchdog" /tr "\"%WATCHDOG%\"" /sc minute /mo 60 /f /rl LIMITED >nul 2>&1
+schtasks /create /tn "AutoMoA-Watchdog" /tr "%WATCHDOG%" /sc minute /mo 60 /f /rl LIMITED >nul 2>&1
 if errorlevel 1 (
   echo [5/5] WARN: schtasks failed (need Admin). Cronjob not installed.
   echo        Re-run as Administrator for cronjob safety net.
