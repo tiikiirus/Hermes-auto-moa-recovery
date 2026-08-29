@@ -14,12 +14,189 @@ index 56397d950..96af8d8dc 100644
              if _moa_prepared_request is not None:
                  api_messages = _moa_prepared_request["messages"]
  
+diff --git a/agent/moa_auto_router.cover b/agent/moa_auto_router.cover
+new file mode 100644
+index 000000000..d999fdf43
+--- /dev/null
++++ b/agent/moa_auto_router.cover
+@@ -0,0 +1,171 @@
++    2: """Auto-MoA route selection helpers.
++       
++       These helpers let a virtual ``auto_moa`` preset resolve to a concrete
++       preset per user turn, based on the current message content.  The router
++       is intentionally lightweight: it does not fan out references itself, it
++       only chooses which preset ``MoAChatCompletions.create()`` should use for
++       the current turn.
++       """
++       
++    2: from __future__ import annotations
++       
++    2: from typing import Any
++       
++    2: _VISUAL_PART_TYPES = {
++           "image",
++           "image_url",
++           "input_image",
++           "input_video",
++           "video",
++           "video_url",
++       }
++       
++       
++    2: def _active_turn_visual_parts(
++           messages: list[dict[str, Any]],
++    2:     context_messages: int = 8,
++       ) -> list[dict[str, Any]]:
++           """Copy current/recent user visual blocks for compression rebases."""
++>>>>>>     conversation = [
++>>>>>>         message
++>>>>>>         for message in messages
++>>>>>>         if message.get("role") in {"user", "assistant"}
++>>>>>>     ][-(max(1, context_messages) + 1) :]
++>>>>>>     visual_parts: list[dict[str, Any]] = []
++>>>>>>     for message in conversation:
++>>>>>>         if message.get("role") != "user":
++>>>>>>             continue
++>>>>>>         content = message.get("content")
++>>>>>>         content_parts = (
++>>>>>>             [content]
++>>>>>>             if isinstance(content, dict)
++>>>>>>             else content
++>>>>>>             if isinstance(content, (list, tuple))
++>>>>>>             else []
++               )
++>>>>>>         for part in content_parts:
++>>>>>>             if (
++>>>>>>                 isinstance(part, dict)
++>>>>>>                 and str(part.get("type") or "").lower() in _VISUAL_PART_TYPES
++>>>>>>                 and part not in visual_parts
++                   ):
++>>>>>>                 visual_parts.append(dict(part))
++>>>>>>     return visual_parts
++       
++       
++    2: def _restore_active_turn_visual_parts(
++           messages: list[dict[str, Any]],
++           visual_parts: Any,
++       ) -> None:
++           """Restore omitted active-turn pixels to the acting aggregator transcript."""
++>>>>>>     if not isinstance(visual_parts, list) or not visual_parts:
++>>>>>>         return
++>>>>>>     parts = [dict(part) for part in visual_parts if isinstance(part, dict)]
++>>>>>>     if not parts:
++>>>>>>         return
++>>>>>>     for index in range(len(messages) - 1, -1, -1):
++>>>>>>         message = messages[index]
++>>>>>>         if message.get("role") != "user":
++>>>>>>             continue
++>>>>>>         content = message.get("content")
++>>>>>>         if isinstance(content, list):
++>>>>>>             existing = list(content)
++>>>>>>         elif isinstance(content, str):
++>>>>>>             existing = [{"type": "text", "text": content}]
++>>>>>>         elif content is None:
++>>>>>>             existing = []
++               else:
++>>>>>>             existing = [content]
++>>>>>>         message["content"] = [
++>>>>>>             *existing,
++>>>>>>             *(part for part in parts if part not in existing),
++               ]
++>>>>>>         return
++>>>>>>     messages.append({"role": "user", "content": parts})
++       
++       
++    2: def auto_route_turn_fingerprint(messages: list[dict[str, Any]]) -> str:
++           """Return a stable fingerprint for the current user turn."""
++>>>>>>     import hashlib
++>>>>>>     import json
++       
++>>>>>>     user_messages = [
++>>>>>>         message for message in messages if message.get("role") == "user"
++           ]
++>>>>>>     last_user = user_messages[-1] if user_messages else {}
++>>>>>>     try:
++>>>>>>         payload = json.dumps(last_user, sort_keys=True, default=str)
++>>>>>>     except (TypeError, ValueError):
++>>>>>>         payload = str(last_user)
++>>>>>>     return hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest()
++       
++       
++    4: class AutoRouteDecision:
++    2:     """Resolved auto-route target for one user turn."""
++       
++    2:     __slots__ = ("preset", "category", "reason")
++       
++    2:     def __init__(self, preset: str, category: str, reason: str) -> None:
++>>>>>>         self.preset = preset
++>>>>>>         self.category = category
++>>>>>>         self.reason = reason
++       
++       
++    2: def select_auto_moa_route(
++           messages: list[dict[str, Any]],
++           auto_route: dict[str, Any],
++    2:     previous_category: str | None = None,
++       ) -> AutoRouteDecision:
++           """Pick a concrete preset for the current user turn.
++       
++           The routing table is a mapping from category keywords to preset names.
++           ``auto_route`` is the raw ``auto_route`` block from a preset config.
++           """
++>>>>>>     if not isinstance(auto_route, dict):
++>>>>>>         return AutoRouteDecision(
++>>>>>>             preset=str(auto_route.get("fallback") or "default"),
++>>>>>>             category="fallback",
++>>>>>>             reason="invalid auto_route block",
++               )
++       
++>>>>>>     last_user = next(
++>>>>>>         (
++>>>>>>             message
++>>>>>>             for message in reversed(messages)
++>>>>>>             if message.get("role") == "user"
++               ),
++>>>>>>         {},
++           )
++>>>>>>     text = str(last_user.get("content") or "")
++>>>>>>     if isinstance(last_user.get("content"), list):
++>>>>>>         text = " ".join(
++>>>>>>             part.get("text", "")
++>>>>>>             for part in last_user["content"]
++>>>>>>             if isinstance(part, dict) and part.get("type") == "text"
++               )
++       
++>>>>>>     lowered = text.lower()
++>>>>>>     category = "fallback"
++>>>>>>     preset = str(auto_route.get("fallback") or "default")
++       
++>>>>>>     if previous_category == "logic" and "logic" in lowered:
++>>>>>>         category = "logic"
++>>>>>>         preset = str(auto_route.get("logic") or preset)
++>>>>>>     elif previous_category == "logic_visual" and any(token in lowered for token in ("image", "chart", "graph", "photo", "screenshot")):
++>>>>>>         category = "logic_visual"
++>>>>>>         preset = str(auto_route.get("logic_visual") or preset)
++>>>>>>     elif any(token in lowered for token in ("image", "chart", "graph", "photo", "screenshot", "visual", "draw", "plot")):
++>>>>>>         category = "code_visual" if any(token in lowered for token in ("plot", "chart", "graph", "visualize", "diagram")) else "logic_visual"
++>>>>>>         preset = str(auto_route.get(category) or auto_route.get("code_visual") or preset)
++>>>>>>     elif any(token in lowered for token in ("code", "function", "script", "program", "implement", "refactor", "bug", "error")):
++>>>>>>         category = "code"
++>>>>>>         preset = str(auto_route.get("code") or preset)
++>>>>>>     elif any(token in lowered for token in ("explain", "why", "reason", "logic", "compare", "analyze", "summarize")):
++>>>>>>         category = "logic"
++>>>>>>         preset = str(auto_route.get("logic") or preset)
++           else:
++>>>>>>         category = "fallback"
++>>>>>>         preset = str(auto_route.get("fallback") or preset)
++       
++>>>>>>     reason = f"auto route → {category}"
++>>>>>>     return AutoRouteDecision(preset=preset, category=category, reason=reason)
 diff --git a/agent/moa_auto_router.py b/agent/moa_auto_router.py
 new file mode 100644
-index 000000000..916f93af6
+index 000000000..fe37d6b20
 --- /dev/null
 +++ b/agent/moa_auto_router.py
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,295 @@
 +"""Auto-MoA route selection helpers.
 +
 +These helpers let a virtual ``auto_moa`` preset resolve to a concrete
@@ -31,8 +208,11 @@ index 000000000..916f93af6
 +
 +from __future__ import annotations
 +
++import hashlib
++import re
 +from typing import Any
 +
++# Visual part types that indicate the user sent an image/video
 +_VISUAL_PART_TYPES = {
 +    "image",
 +    "image_url",
@@ -41,6 +221,67 @@ index 000000000..916f93af6
 +    "video",
 +    "video_url",
 +}
++
++# Token patterns for each category, with word boundaries to avoid false positives.
++# Each pattern matches whole words only (e.g., "code" matches "code" but not "decode").
++_TOKEN_PATTERNS: dict[str, re.Pattern[str]] = {
++    "code": re.compile(
++        r"\b(code|function|script|program|implement|refactor|bug|error|"
++        r"coding|programming|method|class|module|api)\b",
++        re.IGNORECASE,
++    ),
++    "logic": re.compile(
++        r"\b(explain|why|reason|logic|compare|analyze|analysis|summarize|summary|"
++        r"comparison|evaluate|evaluation|assess|assessment|review|understand|"
++        r"describe|description|define|definition|clarify|clarification)\b",
++        re.IGNORECASE,
++    ),
++    "code_visual": re.compile(
++        r"\b(plot|chart|graph|visualize|diagram|draw|drawing|sketch|"
++        r"illustrate|illustration|render|rendering|design|layout|wireframe|"
++        r"mockup|prototype|figma|css|html|ui|ux|interface|screen|component|"
++        r"график|диаграмма|схема|чертёж|макет|прототип|интерфейс|экран|компонент|"
++        r"нарисуй|рисуй)\b",
++        re.IGNORECASE,
++    ),
++    "logic_visual": re.compile(
++        r"\b(image|photo|picture|screenshot|video|visual|graphic|figure|"
++        r"illustration|diagram|flowchart|map|heatmap|scatter|bar|line|pie|"
++        r"histogram|distribution|trend|correlation|pattern)\b",
++        re.IGNORECASE,
++    ),
++    # Russian language tokens (project convention: Russian user comms)
++    # Use prefix matching (no trailing \b) to handle word forms:
++    # "функци" matches "функция", "функцию", "функции", "функций"
++    "code_ru": re.compile(
++        r"\b(код|функци|скрипт|программ|рефактор|баг|ошиб|реализ|"
++        r"метод|класс|модул|api|кодир|программирован)",
++        re.IGNORECASE,
++    ),
++    "logic_ru": re.compile(
++        r"\b(объясни|почему|причина|логика|сравни|анализ|анализируй|"
++        r"резюме|саммари|сравнен|оценк|оцени|ревью|обзор|пойми|"
++        r"описать|описание|определить|определение|уточни|уточнение)",
++        re.IGNORECASE,
++    ),
++    "visual_ru": re.compile(
++        r"\b(картинк|изображение|фото|скриншот|видео|визуал|график|"
++        r"диаграмма|рисуй|нарисуй|чертёж|черти|схема|карта|"
++        r"интерфейс|экран|компонент|дизайн|макет|прототип)",
++        re.IGNORECASE,
++    ),
++}
++
++
++def _has_token(text: str, category: str) -> bool:
++    """Check if text contains any token for the given category."""
++    pattern = _TOKEN_PATTERNS.get(category)
++    return pattern.search(text) is not None if pattern else False
++
++
++def _has_any_token(text: str, *categories: str) -> bool:
++    """Check if text contains any token for any of the given categories."""
++    return any(_has_token(text, cat) for cat in categories)
 +
 +
 +def _active_turn_visual_parts(
@@ -107,19 +348,37 @@ index 000000000..916f93af6
 +
 +
 +def auto_route_turn_fingerprint(messages: list[dict[str, Any]]) -> str:
-+    """Return a stable fingerprint for the current user turn."""
-+    import hashlib
-+    import json
++    """Return a stable fingerprint for the current user turn.
 +
++    Uses only text content to avoid serializing large base64 payloads.
++    """
 +    user_messages = [
 +        message for message in messages if message.get("role") == "user"
 +    ]
 +    last_user = user_messages[-1] if user_messages else {}
-+    try:
-+        payload = json.dumps(last_user, sort_keys=True, default=str)
-+    except (TypeError, ValueError):
-+        payload = str(last_user)
-+    return hashlib.sha256(payload.encode("utf-8", errors="ignore")).hexdigest()
++
++    # Extract only text parts for fingerprinting (avoid base64 bloat)
++    content = last_user.get("content")
++    if isinstance(content, list):
++        text_parts = [
++            part.get("text", "")
++            for part in content
++            if isinstance(part, dict) and part.get("type") == "text"
++        ]
++        text = " ".join(text_parts)
++    else:
++        text = str(content or "")
++
++    # Include visual part types in fingerprint (but not the data)
++    visual_types = sorted(
++        str(part.get("type") or "").lower()
++        for part in (content if isinstance(content, list) else [])
++        if isinstance(part, dict) and part.get("type", "").lower() in _VISUAL_PART_TYPES
++    )
++    if visual_types:
++        text += "|" + ",".join(visual_types)
++
++    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
 +
 +
 +class AutoRouteDecision:
@@ -133,6 +392,30 @@ index 000000000..916f93af6
 +        self.reason = reason
 +
 +
++def _extract_text(last_user: dict[str, Any]) -> str:
++    """Extract text content from a user message, handling both string and list formats."""
++    content = last_user.get("content")
++    if isinstance(content, list):
++        return " ".join(
++            part.get("text", "")
++            for part in content
++            if isinstance(part, dict) and part.get("type") == "text"
++        )
++    return str(content or "")
++
++
++def _has_visual_content(last_user: dict[str, Any]) -> bool:
++    """Check if the message contains visual parts (image/video)."""
++    content = last_user.get("content")
++    if not isinstance(content, list):
++        return False
++    return any(
++        isinstance(part, dict)
++        and str(part.get("type") or "").lower() in _VISUAL_PART_TYPES
++        for part in content
++    )
++
++
 +def select_auto_moa_route(
 +    messages: list[dict[str, Any]],
 +    auto_route: dict[str, Any],
@@ -142,10 +425,17 @@ index 000000000..916f93af6
 +
 +    The routing table is a mapping from category keywords to preset names.
 +    ``auto_route`` is the raw ``auto_route`` block from a preset config.
++
++    Routing priority:
++    1. Visual content (image/video) → visual category
++    2. Code tokens → code category
++    3. Logic tokens → logic category
++    4. Previous category stickiness (for follow-ups)
++    5. Fallback
 +    """
 +    if not isinstance(auto_route, dict):
 +        return AutoRouteDecision(
-+            preset=str(auto_route.get("fallback") or "default"),
++            preset="default",
 +            category="fallback",
 +            reason="invalid auto_route block",
 +        )
@@ -158,55 +448,69 @@ index 000000000..916f93af6
 +        ),
 +        {},
 +    )
-+    text = str(last_user.get("content") or "")
-+    if isinstance(last_user.get("content"), list):
-+        text = " ".join(
-+            part.get("text", "")
-+            for part in last_user["content"]
-+            if isinstance(part, dict) and part.get("type") == "text"
-+        )
 +
-+    lowered = text.lower()
-+    category = "fallback"
-+    preset = str(auto_route.get("fallback") or "default")
++    text = _extract_text(last_user).lower()
++    has_visual = _has_visual_content(last_user)
++    fallback = str(auto_route.get("fallback") or "default")
 +
-+    if previous_category == "logic" and "logic" in lowered:
-+        category = "logic"
-+        preset = str(auto_route.get("logic") or preset)
-+    elif previous_category == "logic_visual" and any(token in lowered for token in ("image", "chart", "graph", "photo", "screenshot")):
-+        category = "logic_visual"
-+        preset = str(auto_route.get("logic_visual") or preset)
-+    elif any(token in lowered for token in ("image", "chart", "graph", "photo", "screenshot", "visual", "draw", "plot")):
-+        category = "code_visual" if any(token in lowered for token in ("plot", "chart", "graph", "visualize", "diagram")) else "logic_visual"
-+        preset = str(auto_route.get(category) or auto_route.get("code_visual") or preset)
-+    elif any(token in lowered for token in ("code", "function", "script", "program", "implement", "refactor", "bug", "error")):
++    # Priority 1: Visual content (check first, overrides stickiness)
++    if has_visual or _has_any_token(text, "code_visual", "logic_visual", "visual_ru"):
++        if _has_any_token(text, "code_visual", "code_ru") or _has_token(text, "code"):
++            category = "code_visual"
++        else:
++            category = "logic_visual"
++        preset = str(auto_route.get(category) or auto_route.get("code_visual") or fallback)
++
++    # Priority 2: Code tokens
++    elif _has_any_token(text, "code", "code_ru"):
 +        category = "code"
-+        preset = str(auto_route.get("code") or preset)
-+    elif any(token in lowered for token in ("explain", "why", "reason", "logic", "compare", "analyze", "summarize")):
++        preset = str(auto_route.get("code") or fallback)
++
++    # Priority 3: Logic tokens
++    elif _has_any_token(text, "logic", "logic_ru"):
 +        category = "logic"
-+        preset = str(auto_route.get("logic") or preset)
++        preset = str(auto_route.get("logic") or fallback)
++
++    # Priority 4: Previous category stickiness (for short follow-ups)
++    elif previous_category == "logic" and len(text.split()) <= 3:
++        category = "logic"
++        preset = str(auto_route.get("logic") or fallback)
++    elif previous_category == "code" and len(text.split()) <= 3:
++        category = "code"
++        preset = str(auto_route.get("code") or fallback)
++    elif previous_category == "logic_visual" and has_visual:
++        category = "logic_visual"
++        preset = str(auto_route.get("logic_visual") or fallback)
++    elif previous_category == "code_visual" and has_visual:
++        category = "code_visual"
++        preset = str(auto_route.get("code_visual") or fallback)
++
++    # Priority 5: Fallback
 +    else:
 +        category = "fallback"
-+        preset = str(auto_route.get("fallback") or preset)
++        preset = fallback
 +
 +    reason = f"auto route → {category}"
 +    return AutoRouteDecision(preset=preset, category=category, reason=reason)
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index d783afd99..e9ba215de 100644
+index d783afd99..58d62be80 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
-@@ -19,6 +19,10 @@ from typing import Any
+@@ -19,6 +19,13 @@ from typing import Any
  
  from agent.auxiliary_client import call_llm
  from agent.message_content import flatten_message_text
 +from agent.moa_auto_router import (
++    AutoRouteDecision,
 +    _active_turn_visual_parts,
 +    _restore_active_turn_visual_parts,
++    auto_route_turn_fingerprint,
++    select_auto_moa_route,
 +)
  from agent.transports import get_transport
  
  logger = logging.getLogger(__name__)
-@@ -1551,6 +1555,7 @@ class MoAChatCompletions:
+@@ -1551,6 +1558,7 @@ class MoAChatCompletions:
          #                        acts; phase="reference" mirrors ``moa.progress``
          #                        so listeners can rely on a single event family)
          #   "moa.aggregating" kwargs: aggregator (label), ref_count
@@ -214,7 +518,7 @@ index d783afd99..e9ba215de 100644
          # Never raises into the model call — display is best-effort.
          self.reference_callback = reference_callback
          # Back-reference to the owning AIAgent, so the reference fan-out can
-@@ -1608,6 +1613,14 @@ class MoAChatCompletions:
+@@ -1608,6 +1616,14 @@ class MoAChatCompletions:
          # Normalized moa.privacy_filter mode for the current turn ('' |
          # 'display' | 'full'), refreshed from config on every create().
          self._privacy_mode: str = ""
@@ -229,7 +533,7 @@ index d783afd99..e9ba215de 100644
  
      def consume_reference_usage(self) -> tuple[Any, Any]:
          """Pop pending reference-fan-out usage + cost, resetting both to empty.
-@@ -1707,6 +1720,7 @@ class MoAChatCompletions:
+@@ -1707,6 +1723,7 @@ class MoAChatCompletions:
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output,
                  aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -237,7 +541,7 @@ index d783afd99..e9ba215de 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1720,7 +1734,7 @@ class MoAChatCompletions:
+@@ -1720,7 +1737,7 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -246,7 +550,7 @@ index d783afd99..e9ba215de 100644
          """Run the advisor fan-out and return the exact aggregator request.
  
          The normal agent loop needs to measure this augmented prompt before its
-@@ -1728,7 +1742,11 @@ class MoAChatCompletions:
+@@ -1728,7 +1745,11 @@ class MoAChatCompletions:
          when the loop supplies the returned private object back to ``create()``,
          the advisor fan-out is not repeated.
          """
@@ -259,7 +563,7 @@ index d783afd99..e9ba215de 100644
  
      def rebase_prepared_request(
          self, prepared: dict[str, Any], messages: list[dict[str, Any]]
-@@ -1742,6 +1760,10 @@ class MoAChatCompletions:
+@@ -1742,6 +1763,10 @@ class MoAChatCompletions:
          """
          guidance = prepared.get("guidance")
          agg_messages = [dict(message) for message in messages]
@@ -270,7 +574,7 @@ index d783afd99..e9ba215de 100644
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
          return {**prepared, "messages": agg_messages}
-@@ -1898,6 +1920,7 @@ class MoAChatCompletions:
+@@ -1898,6 +1923,7 @@ class MoAChatCompletions:
          return _agg_response
  
      def create(self, **api_kwargs: Any) -> Any:
@@ -278,7 +582,7 @@ index d783afd99..e9ba215de 100644
          prepared_request = api_kwargs.pop("_moa_prepared_request", None)
          if prepared_request is not None:
              if not isinstance(prepared_request, dict):
-@@ -1905,34 +1928,119 @@ class MoAChatCompletions:
+@@ -1905,34 +1931,126 @@ class MoAChatCompletions:
              return self._call_prepared_aggregator(prepared_request, api_kwargs)
  
          from hermes_cli.config import get_config_path, load_config
@@ -361,13 +665,6 @@ index d783afd99..e9ba215de 100644
 +                f"MoA auto preset '{self.preset_name}' has an invalid auto_route"
 +            )
 +        if isinstance(auto_route, dict):
-+            from agent.moa_auto_router import (
-+                _active_turn_visual_parts,
-+                _restore_active_turn_visual_parts,
-+                auto_route_turn_fingerprint,
-+                select_auto_moa_route,
-+            )
-+
 +            turn_sig = (
 +                f"turn-id:{api_kwargs.get('_moa_turn_id')}"
 +                if api_kwargs.get("_moa_turn_id") is not None
@@ -379,20 +676,44 @@ index d783afd99..e9ba215de 100644
 +                    auto_route,
 +                    previous_category=self._auto_route_previous_category,
 +                )
-+                if decision.preset == self.preset_name:
-+                    raise RuntimeError(
-+                        f"MoA auto preset '{self.preset_name}' cannot route to itself"
++                # Validate target preset with graceful fallback
++                target_name = decision.preset
++                if target_name == self.preset_name:
++                    # Self-route: fall back to configured fallback
++                    target_name = auto_route.get("fallback") or "default"
++                    decision = AutoRouteDecision(
++                        preset=target_name,
++                        category="fallback",
++                        reason="self-route avoided, using fallback",
 +                    )
-+                target_preset = resolve_moa_preset(_moa_raw, decision.preset)
++                try:
++                    target_preset = resolve_moa_preset(_moa_raw, target_name)
++                except Exception:
++                    # Target preset missing: fall back
++                    target_name = auto_route.get("fallback") or "default"
++                    target_preset = resolve_moa_preset(_moa_raw, target_name)
++                    decision = AutoRouteDecision(
++                        preset=target_name,
++                        category="fallback",
++                        reason="target preset missing, using fallback",
++                    )
 +                if target_preset.get("auto_route"):
-+                    raise RuntimeError(
-+                        f"MoA auto preset '{self.preset_name}' cannot route to "
-+                        f"another auto preset '{decision.preset}'"
++                    # Target is itself an auto preset: fall back
++                    target_name = auto_route.get("fallback") or "default"
++                    target_preset = resolve_moa_preset(_moa_raw, target_name)
++                    decision = AutoRouteDecision(
++                        preset=target_name,
++                        category="fallback",
++                        reason="target is auto preset, using fallback",
 +                    )
 +                if not target_preset.get("enabled", True):
-+                    raise RuntimeError(
-+                        f"MoA auto preset '{self.preset_name}' cannot route to "
-+                        f"disabled preset '{decision.preset}'"
++                    # Target disabled: fall back
++                    target_name = auto_route.get("fallback") or "default"
++                    target_preset = resolve_moa_preset(_moa_raw, target_name)
++                    decision = AutoRouteDecision(
++                        preset=target_name,
++                        category="fallback",
++                        reason="target disabled, using fallback",
 +                    )
 +                self._auto_route_turn_sig = turn_sig
 +                self._auto_route_turn_decision = decision
@@ -408,16 +729,6 @@ index d783afd99..e9ba215de 100644
 +                decision = select_auto_moa_route(messages, auto_route)
 +            effective_preset_name = decision.preset
 +            preset = resolve_moa_preset(_moa_raw, effective_preset_name)
-+            if preset.get("auto_route"):
-+                raise RuntimeError(
-+                    f"MoA auto preset '{self.preset_name}' cannot route to "
-+                    f"another auto preset '{decision.preset}'"
-+                )
-+            if not preset.get("enabled", True):
-+                raise RuntimeError(
-+                    f"MoA auto preset '{self.preset_name}' cannot route to "
-+                    f"disabled preset '{decision.preset}'"
-+                )
 +            self.last_auto_route_decision = decision
 +        else:
 +            self.last_auto_route_decision = None
@@ -425,7 +736,7 @@ index d783afd99..e9ba215de 100644
          # Privacy filter mode: '' (off, default) | 'display' | 'full'. See
          # coerce_privacy_filter / the pattern block at the top of this module.
          # Remembered on self so _call_prepared_aggregator (which may run on a
-@@ -2185,10 +2293,20 @@ class MoAChatCompletions:
+@@ -2185,10 +2303,20 @@ class MoAChatCompletions:
              else:
                  _trace_refs = list(reference_outputs)
              self._pending_trace = {
@@ -447,7 +758,7 @@ index d783afd99..e9ba215de 100644
              }
              # Derived from the same privacy-redacted _trace_refs, so an active
              # privacy mode redacts the observability payload too.
-@@ -2290,7 +2408,7 @@ class MoAChatCompletions:
+@@ -2290,7 +2418,7 @@ class MoAChatCompletions:
                  joined = f"{joined}\n\n{degraded}" if joined else degraded
              guidance = (
                  "[Mixture of Agents reference context]\n"
@@ -456,7 +767,7 @@ index d783afd99..e9ba215de 100644
                  f"Aggregator/acting model: {_slot_label(aggregator)}\n"
                  f"References: {', '.join(label for label, _, _ in _agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
-@@ -2417,6 +2535,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
+@@ -2417,6 +2545,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
                      moa_refs_done=kwargs.get("refs_done"),
                      moa_refs_total=kwargs.get("refs_total"),
                  )
@@ -713,142 +1024,332 @@ index 24d36e4a1..02486771c 100644
  def normalize_moa_config(raw: Any) -> dict[str, Any]:
 diff --git a/tests/agent/test_moa_auto_router.py b/tests/agent/test_moa_auto_router.py
 new file mode 100644
-index 000000000..9ba079d21
+index 000000000..ff68355c6
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_router.py
-@@ -0,0 +1,132 @@
-+"""Tests for the auto-MoA router and ``moa.route`` relay contract."""
-+from __future__ import annotations
+@@ -0,0 +1,322 @@
++"""Tests for auto-MoA route selection logic."""
 +
 +import pytest
-+
 +from agent.moa_auto_router import (
 +    AutoRouteDecision,
++    _active_turn_visual_parts,
++    _restore_active_turn_visual_parts,
++    _VISUAL_PART_TYPES,
 +    auto_route_turn_fingerprint,
 +    select_auto_moa_route,
 +)
 +
 +
-+def _route(messages, auto_route):
-+    return select_auto_moa_route(messages, auto_route)
++@pytest.fixture
++def auto_route():
++    return {
++        "code": "code_logic_deep",
++        "logic": "logic_deep",
++        "code_visual": "code_visual_deep",
++        "logic_visual": "logic_visual_deep",
++        "fallback": "default",
++    }
 +
 +
-+def test_auto_route_selects_code_category_for_code_tokens():
-+    decision = _route(
-+        [{"role": "user", "content": "refactor the python script"}],
-+        {
-+            "fallback": "default",
-+            "code": "code_preset",
-+            "logic": "logic_preset",
-+            "code_visual": "plot_preset",
-+            "logic_visual": "chart_preset",
-+        },
-+    )
-+    assert decision.preset == "code_preset"
-+    assert decision.category == "code"
-+    assert decision.reason == "auto route → code"
++class TestSelectAutoMoaRoute:
++    """Tests for select_auto_moa_route function."""
++
++    def test_code_tokens_route_to_code(self, auto_route):
++        messages = [{"role": "user", "content": "write a function to sort a list"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "code"
++        assert decision.preset == "code_logic_deep"
++
++    def test_logic_tokens_route_to_logic(self, auto_route):
++        messages = [{"role": "user", "content": "explain why this algorithm works"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "logic"
++        assert decision.preset == "logic_deep"
++
++    def test_visual_tokens_route_to_visual(self, auto_route):
++        messages = [{"role": "user", "content": "show me a chart of the results"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "code_visual"
++        assert decision.preset == "code_visual_deep"
++
++    def test_image_content_routes_to_visual(self, auto_route):
++        messages = [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
++                ],
++            }
++        ]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category in ("code_visual", "logic_visual")
++
++    def test_empty_message_routes_to_fallback(self, auto_route):
++        messages = [{"role": "user", "content": ""}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "fallback"
++        assert decision.preset == "default"
++
++    def test_no_user_message_routes_to_fallback(self, auto_route):
++        messages = [{"role": "assistant", "content": "hello"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "fallback"
++
++    def test_invalid_auto_route_returns_fallback(self):
++        messages = [{"role": "user", "content": "test"}]
++        decision = select_auto_moa_route(messages, "not-a-dict")
++        assert decision.category == "fallback"
++        assert decision.preset == "default"
++
++    def test_invalid_auto_route_none_returns_fallback(self):
++        messages = [{"role": "user", "content": "test"}]
++        decision = select_auto_moa_route(messages, None)
++        assert decision.category == "fallback"
++
++    def test_previous_category_sticks_for_short_followup(self, auto_route):
++        messages = [{"role": "user", "content": "and why?"}]
++        decision = select_auto_moa_route(messages, auto_route, previous_category="logic")
++        assert decision.category == "logic"
++
++    def test_previous_category_ignored_for_long_message(self, auto_route):
++        messages = [
++            {
++                "role": "user",
++                "content": "now write a completely different function that does something else",
++            }
++        ]
++        decision = select_auto_moa_route(messages, auto_route, previous_category="logic")
++        assert decision.category == "code"
++
++    def test_content_list_extracts_text(self, auto_route):
++        messages = [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "explain this code"},
++                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
++                ],
++            }
++        ]
++        decision = select_auto_moa_route(messages, auto_route)
++        # Has visual content → visual category
++        assert decision.category in ("code_visual", "logic_visual")
++
++    def test_russian_code_tokens(self, auto_route):
++        messages = [{"role": "user", "content": "напиши функцию сортировки"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "code"
++
++    def test_russian_logic_tokens(self, auto_route):
++        messages = [{"role": "user", "content": "объясни как работает алгоритм"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "logic"
++
++    def test_russian_visual_tokens(self, auto_route):
++        messages = [{"role": "user", "content": "нарисуй график результатов"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "code_visual"
++
++    def test_russian_image_description(self, auto_route):
++        messages = [{"role": "user", "content": "проанализируй скриншот"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category == "logic_visual"
++
++    def test_paragraph_not_matched_as_graph(self, auto_route):
++        """Regression: 'paragraph' contains 'graph' as substring but should not match."""
++        messages = [{"role": "user", "content": "write a paragraph about the topic"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "code_visual"
++
++    def test_photograph_not_matched_as_photo(self, auto_route):
++        """Regression: 'photograph' contains 'photo' but should not match."""
++        messages = [{"role": "user", "content": "show me the photograph"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "code_visual"
++
++    def test_decode_not_matched_as_code(self, auto_route):
++        """Regression: 'decode' contains 'code' but should not match."""
++        messages = [{"role": "user", "content": "decode this token"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "code"
++
++    def test_description_not_matched_as_script(self, auto_route):
++        """Regression: 'description' contains 'script' but should not match."""
++        messages = [{"role": "user", "content": "the description is unclear"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "code"
++
++    def test_drawback_not_matched_as_draw(self, auto_route):
++        """Regression: 'drawback' contains 'draw' but should not match."""
++        messages = [{"role": "user", "content": "drawback noted"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "logic_visual"
++
++    def test_dysfunction_not_matched_as_function(self, auto_route):
++        """Regression: 'dysfunction' contains 'function' but should not match."""
++        messages = [{"role": "user", "content": "analyze the dysfunction"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "code"
++
++    def test_uncharted_not_matched_as_chart(self, auto_route):
++        """Regression: 'uncharted' contains 'chart' but should not match."""
++        messages = [{"role": "user", "content": "uncharted territory"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.category != "code_visual"
 +
 +
-+def test_auto_route_selects_logic_category_for_explain_tokens():
-+    decision = _route(
-+        [{"role": "user", "content": "explain why this fails"}],
-+        {
-+            "fallback": "default",
-+            "code": "code_preset",
-+            "logic": "logic_preset",
-+            "code_visual": "plot_preset",
-+            "logic_visual": "chart_preset",
-+        },
-+    )
-+    assert decision.preset == "logic_preset"
-+    assert decision.category == "logic"
-+    assert decision.reason == "auto route → logic"
++class TestActiveTurnVisualParts:
++    """Tests for _active_turn_visual_parts function."""
++
++    def test_extracts_image_parts(self):
++        messages = [
++            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "test"}}]}
++        ]
++        result = _active_turn_visual_parts(messages)
++        assert len(result) == 1
++        assert result[0]["type"] == "image_url"
++
++    def test_extracts_video_parts(self):
++        messages = [
++            {"role": "user", "content": [{"type": "video_url", "video_url": {"url": "test"}}]}
++        ]
++        result = _active_turn_visual_parts(messages)
++        assert len(result) == 1
++
++    def test_ignores_text_parts(self):
++        messages = [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
++        result = _active_turn_visual_parts(messages)
++        assert len(result) == 0
++
++    def test_ignores_assistant_messages(self):
++        messages = [
++            {
++                "role": "assistant",
++                "content": [{"type": "image_url", "image_url": {"url": "test"}}],
++            }
++        ]
++        result = _active_turn_visual_parts(messages)
++        assert len(result) == 0
++
++    def test_deduplicates_parts(self):
++        messages = [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "image_url", "image_url": {"url": "test"}},
++                    {"type": "image_url", "image_url": {"url": "test"}},
++                ],
++            }
++        ]
++        result = _active_turn_visual_parts(messages)
++        assert len(result) == 1
++
++    def test_empty_messages(self):
++        result = _active_turn_visual_parts([])
++        assert result == []
 +
 +
-+def test_auto_route_selects_logic_visual_for_image_tokens():
-+    decision = _route(
-+        [{"role": "user", "content": "show me the screenshot"}],
-+        {
-+            "fallback": "default",
-+            "code": "code_preset",
-+            "logic": "logic_preset",
-+            "code_visual": "plot_preset",
-+            "logic_visual": "chart_preset",
-+        },
-+    )
-+    assert decision.preset == "chart_preset"
-+    assert decision.category == "logic_visual"
-+    assert decision.reason == "auto route → logic_visual"
++class TestRestoreActiveTurnVisualParts:
++    """Tests for _restore_active_turn_visual_parts function."""
++
++    def test_restores_to_last_user_message(self):
++        messages = [
++            {"role": "assistant", "content": "hello"},
++            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
++        ]
++        visual_parts = [{"type": "image_url", "image_url": {"url": "test"}}]
++        _restore_active_turn_visual_parts(messages, visual_parts)
++        assert len(messages[1]["content"]) == 2
++
++    def test_handles_string_content(self):
++        messages = [{"role": "user", "content": "hello"}]
++        visual_parts = [{"type": "image_url", "image_url": {"url": "test"}}]
++        _restore_active_turn_visual_parts(messages, visual_parts)
++        assert isinstance(messages[0]["content"], list)
++        assert len(messages[0]["content"]) == 2
++
++    def test_handles_none_content(self):
++        messages = [{"role": "user", "content": None}]
++        visual_parts = [{"type": "image_url", "image_url": {"url": "test"}}]
++        _restore_active_turn_visual_parts(messages, visual_parts)
++        assert isinstance(messages[0]["content"], list)
++        assert len(messages[0]["content"]) == 1
++
++    def test_handles_no_user_messages(self):
++        messages = [{"role": "assistant", "content": "hello"}]
++        visual_parts = [{"type": "image_url", "image_url": {"url": "test"}}]
++        _restore_active_turn_visual_parts(messages, visual_parts)
++        assert len(messages) == 2
++        assert messages[-1]["role"] == "user"
++
++    def test_empty_visual_parts_noop(self):
++        messages = [{"role": "user", "content": "hello"}]
++        _restore_active_turn_visual_parts(messages, [])
++        assert messages[0]["content"] == "hello"
++
++    def test_none_visual_parts_noop(self):
++        messages = [{"role": "user", "content": "hello"}]
++        _restore_active_turn_visual_parts(messages, None)
++        assert messages[0]["content"] == "hello"
 +
 +
-+def test_auto_route_selects_code_visual_for_chart_tokens():
-+    decision = _route(
-+        [{"role": "user", "content": "plot the results as a chart"}],
-+        {
-+            "fallback": "default",
-+            "code": "code_preset",
-+            "logic": "logic_preset",
-+            "code_visual": "plot_preset",
-+            "logic_visual": "chart_preset",
-+        },
-+    )
-+    assert decision.preset == "plot_preset"
-+    assert decision.category == "code_visual"
-+    assert decision.reason == "auto route → code_visual"
++class TestAutoRouteTurnFingerprint:
++    """Tests for auto_route_turn_fingerprint function."""
++
++    def test_deterministic(self):
++        messages = [{"role": "user", "content": "hello"}]
++        fp1 = auto_route_turn_fingerprint(messages)
++        fp2 = auto_route_turn_fingerprint(messages)
++        assert fp1 == fp2
++
++    def test_changes_with_content(self):
++        messages1 = [{"role": "user", "content": "hello"}]
++        messages2 = [{"role": "user", "content": "world"}]
++        fp1 = auto_route_turn_fingerprint(messages1)
++        fp2 = auto_route_turn_fingerprint(messages2)
++        assert fp1 != fp2
++
++    def test_handles_content_list(self):
++        messages = [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "hello"},
++                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
++                ],
++            }
++        ]
++        fp = auto_route_turn_fingerprint(messages)
++        assert isinstance(fp, str)
++        assert len(fp) == 64  # sha256 hex
++
++    def test_handles_non_serializable_content(self):
++        """Regression: non-JSON-serializable content should not crash."""
++        messages = [
++            {
++                "role": "user",
++                "content": {"key": object()},  # non-serializable
++            }
++        ]
++        fp = auto_route_turn_fingerprint(messages)
++        assert isinstance(fp, str)
++
++    def test_empty_messages(self):
++        fp = auto_route_turn_fingerprint([])
++        assert isinstance(fp, str)
 +
 +
-+def test_auto_route_fallback_when_no_tokens_match():
-+    decision = _route(
-+        [{"role": "user", "content": "hello world"}],
-+        {
-+            "fallback": "default",
-+            "code": "code_preset",
-+            "logic": "logic_preset",
-+            "code_visual": "plot_preset",
-+            "logic_visual": "chart_preset",
-+        },
-+    )
-+    assert decision.preset == "default"
-+    assert decision.category == "fallback"
-+    assert decision.reason == "auto route → fallback"
++class TestAutoRouteDecision:
++    """Tests for AutoRouteDecision class."""
 +
-+
-+def test_auto_route_uses_configured_fallback_preset():
-+    decision = _route(
-+        [{"role": "user", "content": "hello world"}],
-+        {
-+            "fallback": "balanced",
-+            "code": "code_preset",
-+            "logic": "logic_preset",
-+            "code_visual": "plot_preset",
-+            "logic_visual": "chart_preset",
-+        },
-+    )
-+    assert decision.preset == "balanced"
-+    assert decision.category == "fallback"
-+    assert decision.reason == "auto route → fallback"
-+
-+
-+def test_auto_route_fingerprint_is_deterministic():
-+    messages = [{"role": "user", "content": "hello"}]
-+    first = auto_route_turn_fingerprint(messages)
-+    second = auto_route_turn_fingerprint(messages)
-+    assert first == second
-+    assert isinstance(first, str)
-+    assert len(first) == 64
-+
-+
-+def test_auto_route_fingerprint_changes_with_message_content():
-+    first = auto_route_turn_fingerprint([{"role": "user", "content": "hello"}])
-+    second = auto_route_turn_fingerprint([{"role": "user", "content": "world"}])
-+    assert first != second
-+
-+
-+def test_auto_route_decision_exposes_expected_fields():
-+    decision = AutoRouteDecision(preset="x", category="code", reason="auto route → code")
-+    assert decision.preset == "x"
-+    assert decision.category == "code"
-+    assert decision.reason == "auto route → code"
++    def test_exposes_expected_fields(self):
++        decision = AutoRouteDecision(
++            preset="code_logic_deep", category="code", reason="test"
++        )
++        assert decision.preset == "code_logic_deep"
++        assert decision.category == "code"
++        assert decision.reason == "test"
 diff --git a/tests/agent/test_moa_route_relay.py b/tests/agent/test_moa_route_relay.py
 new file mode 100644
 index 000000000..daab8acb1
@@ -902,19 +1403,20 @@ index 000000000..daab8acb1
 +    ]
 diff --git a/tests/hermes_cli/test_moa_auto_route.py b/tests/hermes_cli/test_moa_auto_route.py
 new file mode 100644
-index 000000000..330dd752f
+index 000000000..a0f1081da
 --- /dev/null
 +++ b/tests/hermes_cli/test_moa_auto_route.py
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,138 @@
 +"""Regression: auto_route must survive MoA preset normalization.
 +
 +The virtual ``auto_moa`` preset carries an ``auto_route`` table that the
 +MoA loop reads to resolve a concrete preset per user turn.  ``normalize_moa_config``
-+used to rebuild each preset from a fixed field allow-list and silently dropped
++used to rebuild each preset from a fixed allow-list and silently dropped
 +``auto_route``, which made ``MoAChatCompletions.create()`` raise
 +``RuntimeError: MoA auto preset 'auto_moa' has an invalid auto_route``.
 +"""
 +
++import pytest
 +from hermes_cli.moa_config import normalize_moa_config, resolve_moa_preset
 +
 +
@@ -953,7 +1455,6 @@ index 000000000..330dd752f
 +        "auto_route must survive normalization as a dict"
 +    )
 +    assert preset["auto_route"]["logic"] == "logic_deep"
-+    # nested context_messages should ride along inside auto_route
 +    assert preset["auto_route"].get("context_messages") == 8
 +
 +
@@ -970,6 +1471,80 @@ index 000000000..330dd752f
 +    raw["presets"]["auto_moa"]["auto_route"] = "not-a-dict"
 +    cfg = normalize_moa_config(raw)
 +    assert cfg["presets"]["auto_moa"].get("auto_route") is None
++
++
++@pytest.mark.parametrize(
++    "auto_route_config,expected_targets",
++    [
++        (
++            {
++                "code": "code_logic_deep",
++                "logic": "logic_deep",
++                "code_visual": "code_visual_deep",
++                "logic_visual": "logic_visual_deep",
++                "fallback": "default",
++            },
++            {"code_logic_deep", "logic_deep", "code_visual_deep", "logic_visual_deep", "default"},
++        ),
++        (
++            {
++                "code": "deepseek_code",
++                "logic": "o3_logic",
++                "code_visual": "gpt4v_visual",
++                "logic_visual": "gpt4v_visual",
++                "fallback": "default",
++            },
++            {"deepseek_code", "o3_logic", "gpt4v_visual", "default"},
++        ),
++    ],
++)
++def test_clean_auto_route_accepts_valid_configs(auto_route_config, expected_targets):
++    """Valid auto_route configs should survive normalization."""
++    from hermes_cli.moa_config import _clean_auto_route
++
++    result = _clean_auto_route(auto_route_config)
++    assert result is not None
++    # Check only string values (exclude context_messages which is an int)
++    string_values = {v for v in result.values() if isinstance(v, str)}
++    assert string_values == expected_targets
++
++
++@pytest.mark.parametrize(
++    "auto_route_config",
++    [
++        {"code": "", "logic": "l", "code_visual": "cv", "logic_visual": "lv", "fallback": "d"},
++        {"code": "c", "logic": "", "code_visual": "cv", "logic_visual": "lv", "fallback": "d"},
++        "string-auto-route",
++        None,
++        42,
++    ],
++)
++def test_clean_auto_route_rejects_invalid_configs(auto_route_config):
++    """Invalid auto_route configs should return None."""
++    from hermes_cli.moa_config import _clean_auto_route
++
++    result = _clean_auto_route(auto_route_config)
++    assert result is None
++
++
++def test_normalize_clamps_context_messages():
++    """context_messages must be clamped to [1, 20]."""
++    from hermes_cli.moa_config import _clean_auto_route
++
++    config = {
++        "code": "c",
++        "logic": "l",
++        "code_visual": "cv",
++        "logic_visual": "lv",
++        "fallback": "d",
++        "context_messages": 100,
++    }
++    result = _clean_auto_route(config)
++    assert result["context_messages"] == 20
++
++    config["context_messages"] = 0
++    result = _clean_auto_route(config)
++    assert result["context_messages"] == 1
 diff --git a/tui_gateway/server.py b/tui_gateway/server.py
 index 6f0f6ee2e..0a3eca335 100644
 --- a/tui_gateway/server.py
