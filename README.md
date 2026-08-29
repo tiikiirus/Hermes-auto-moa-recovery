@@ -11,19 +11,20 @@
 
 ## Snapshot
 
-- Дата: `2026-08-20`
-- Базовый Hermes commit: `158e9a99779428245c7f524aade8ab398e44676c`
-- Patch применяется только после успешного `git apply --check`.
+- Дата: `2026-08-29`
+- Базовый Hermes commit: `ac8990b47edca65a9e2ba087bedcb0137e95621f`
+- Репозиторий `hermes-agent` обновлён; legacy patch часто оказывается несовместимым.
+- Скрипт восстановления теперь идемпотентен: при уже восстановленном коде повторно patch не применяется.
 - Реальные Nous/model requests скрипт не запускает.
 
 ## Файлы
 
 | Файл | Назначение |
 |---|---|
-| `restore-auto-moa-after-update.bat` | Безопасное восстановление, config check, focused tests и UI builds |
-| `auto-moa-router-source-20260820.patch` | Полный source patch auto-router/runtime/CLI/Desktop/Ink TUI/tests |
+| `restore-auto-moa-after-update.bat` | Идемпотентное восстановление: пропускает patch, если `agent/moa_auto_router.py` уже есть; иначе применяет patch; затем config check, focused tests и UI builds |
+| `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев |
 | `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph |
-| `SHA256SUMS.txt` | Контроль целостности трёх recovery-артефактов |
+| `SHA256SUMS.txt` | Контроль целостности recovery-артефактов |
 | `USER_GUIDE_RU.txt` | Подробная русская инструкция, копия файла с рабочего стола |
 
 BAT переносим: он ищет patch и YAML **рядом с собой** через `%~dp0`.
@@ -44,7 +45,7 @@ BAT переносим: он ищет patch и YAML **рядом с собой**
 & "C:\Users\tiki\Documents\Hermes-auto-moa-recovery\restore-auto-moa-after-update.bat" aiqa
 ```
 
-4. Дождаться `[auto_moa] SUCCESS.`
+4. Дождаться `[auto_moa] SUCCESS.` или безопасного сообщения `already restored; skipping patch.`
 5. Перезапустить Desktop/backend и выбрать **Mixture of Agents → `auto_moa`**.
 
 ### Быстрый режим
@@ -59,8 +60,8 @@ BAT переносим: он ищет patch и YAML **рядом с собой**
 
 ## Безопасность
 
-- Если patch уже применён, повторного применения не будет.
-- При несовместимом update скрипт завершится с `patch is incompatible` и не применит patch частично.
+- Если `agent/moa_auto_router.py` уже присутствует в целевом репозитории, батник завершается как `already restored` и не трогает рабочие файлы.
+- При несовместимом update скрипт завершается с `patch is incompatible` и не применяет patch частично.
 - Не используются `git reset --hard`, `git clean`, `git checkout .` или `git apply --reject`.
 - Перед восстановлением MoA graph сохраняется `config.yaml.before-auto-moa-restore.bak`.
 - При установке в другой профиль его секция `moa` может быть заменена сохранённой секцией из `aiqa`; предыдущий config сначала резервируется.

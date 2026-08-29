@@ -33,6 +33,11 @@ pushd "%REPO%" || goto :pushd_failed
 set "PUSHED=1"
 git rev-parse --is-inside-work-tree >nul 2>&1 || goto :not_repo
 
+if exist "agent\moa_auto_router.py" (
+  echo [auto_moa] already restored; skipping patch.
+  goto :patch_verified
+)
+
 git apply --reverse --check "%PATCH%" >nul 2>&1
 if not errorlevel 1 (
   echo [auto_moa] source patch is already applied.
