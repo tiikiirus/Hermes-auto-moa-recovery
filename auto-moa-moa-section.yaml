@@ -4,7 +4,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: max
         enabled: true
       - provider: nous
@@ -17,7 +17,7 @@ moa:
         enabled: true
       aggregator:
         provider: nous
-        model: tencent/hy3:free
+        model: meituan/longcat-2.0:free
         reasoning_effort: max
       degraded_reference_policy: loud
       fanout: user_turn
@@ -25,11 +25,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: poolside/laguna-s-2.1:free
-        reasoning_effort: max
-        enabled: true
-      - provider: nous
-        model: tencent/hy3:free
+        model: meituan/longcat-2.0:free
         reasoning_effort: max
         enabled: true
       - provider: nous
@@ -40,9 +36,13 @@ moa:
         model: poolside/laguna-xs-2.1:free
         reasoning_effort: max
         enabled: true
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: max
+        enabled: true
       aggregator:
         provider: nous
-        model: meituan/longcat-2.0:free
+        model: poolside/laguna-s-2.1:free
         reasoning_effort: max
       degraded_reference_policy: loud
       fanout: user_turn
@@ -54,7 +54,7 @@ moa:
         reasoning_effort: max
         enabled: true
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: max
         enabled: true
       - provider: nous
@@ -63,7 +63,7 @@ moa:
         enabled: true
       aggregator:
         provider: nous
-        model: tencent/hy3:free
+        model: meituan/longcat-2.0:free
         reasoning_effort: max
       degraded_reference_policy: loud
       fanout: user_turn
@@ -79,7 +79,7 @@ moa:
         reasoning_effort: max
         enabled: true
       - provider: nous
-        model: tencent/hy3:free
+        model: upstage/solar-pro4:free
         reasoning_effort: max
         enabled: true
       - provider: nous
@@ -96,7 +96,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: tencent/hy3:free
+        model: poolside/laguna-s-2.1:free
         reasoning_effort: max
         enabled: true
       - provider: nous
@@ -124,7 +124,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: tencent/hy3:free
+        model: poolside/laguna-xs-2.1:free
         reasoning_effort: max
         enabled: true
       - provider: nous

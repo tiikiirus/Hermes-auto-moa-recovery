@@ -86,7 +86,7 @@ auto-MoA восстановлен
 
 | Файл | Назначение |
 |---|---|
-| `auto-moa-current.patch` | Чистый патч против `origin/main` (1011 строк, 9 файлов). Накатывается на свежий `hermes update`. |
+| `auto-moa-current.patch` | Чистый патч против `origin/main` hermes-agent (накатывается на свежий `hermes update`; синхронизирован с hermes-agent `89d076a`). |
 | `auto-moa-hook.sh` | post-merge git hook для ручного `git pull` (не срабатывает при `hermes update`, т.к. тот использует `reset --hard`). |
 | `auto-moa-watchdog.bat` | Скрипт починки: пере-накатывает патч если `auto_moa_router.py` отсутствует или рассинхрон. |
 | `hermes-update.bat` | Обёртка `hermes update` с авто-починкой (`--check`/`--repair`/`update`). |
@@ -94,8 +94,41 @@ auto-MoA восстановлен
 | `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
 | `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
 | `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph. |
+| `check-moa-models.py` / `.bat` | Мониторинг живости `:free`-моделей схемы (без API-ключа) + список новых free-моделей в каталоге. |
+| `rotate-moa-model.py` / `.bat` | Ротация выпавшей модели во всех конфигах: `rotate-moa-model.bat <dead> <replacement>`. |
 | `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |
 | `USER_GUIDE_RU.txt` | Подробная русская инструкция. |
+
+## Схема MoA и ротация моделей (актуально с 01.09.2026)
+
+Free-модели Nous — ротация промо, не контракт: `tencent/hy3:free` умер 01.09.2026
+(«HTTP 404: This model's free period has ended»). Агрегатор MoA-пресета — единая
+точка отказа (fallback на него не распространяется), поэтому агрегаторы распределены так:
+
+| Пресет | Агрегатор | Падение модели → сломано пресетов |
+|---|---|---|
+| `default`, `logic_deep` | `meituan/longcat-2.0:free` | longcat умрёт → 2 |
+| `code_logic_deep` | `poolside/laguna-s-2.1:free` | laguna-s умрёт → 1 |
+| `code_visual_deep`, `logic_visual_deep`, `auto_moa` | `stepfun/step-3.7-flash:free` | step умрёт → 2 |
+
+Референсы деградируют мягко (turn не роняется): laguna-xs, solar-pro4, ling-3.0-flash-fin.
+
+### Мониторинг и ротация
+
+```powershell
+# Проверить живость всех моделей схемы (ключ не нужен; вручную или по расписанию):
+check-moa-models.bat            # задачa AutoMoA-ModelCheck, ежедневно 09:00
+# Ротация выпавшей модели во всех 4 конфигах + recovery yaml:
+rotate-moa-model.bat tencent/hy3:free meituan/longcat-2.0:free
+# После ротации:
+hermes config check
+hermes -z "ping" --provider moa -m <preset> --cli   # прогнать затронутые пресеты
+```
+
+Монитор различает без ключа: `404 free period` → модель снята с бесплатных (ROTATE),
+`404 not found` → модели нет в каталоге (REMOVED), `401/429` → модель жива.
+Лог: `%LOCALAPPDATA%\hermes\logs\model-monitor.log`. Каталог free-моделей:
+`https://portal.nousresearch.com/models` и `GET https://inference-api.nousresearch.com/v1/models`.
 
 ## Для всех профилей
 
@@ -124,7 +157,7 @@ auto-MoA восстановлен
 
 ## Git-архив
 
-Это локальный Git-репозиторий без remote. Git защищает историю от случайного изменения файлов, но не от поломки диска.
+Git-репозиторий с remote (`origin`); история дублируется в `Hermes-auto-moa-recovery.bundle`. Git защищает историю от случайного изменения файлов, но не от поломки диска.
 
 Проверить состояние:
 
