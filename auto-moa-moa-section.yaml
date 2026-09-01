@@ -5,113 +5,98 @@ moa:
       reference_models:
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
       - provider: nous
         model: upstage/solar-pro4:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
       - provider: nous
         model: poolside/laguna-s-2.1:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: meituan/longcat-2.0:free
-        reasoning_effort: max
-      degraded_reference_policy: loud
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
       fanout: user_turn
     code_logic_deep:
       enabled: true
       reference_models:
       - provider: nous
         model: meituan/longcat-2.0:free
-        reasoning_effort: max
-        enabled: true
-      - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
       aggregator:
         provider: nous
         model: poolside/laguna-s-2.1:free
-        reasoning_effort: max
-      degraded_reference_policy: loud
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
       fanout: user_turn
     logic_deep:
       enabled: true
       reference_models:
       - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: max
-        enabled: true
-      - provider: nous
-        model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: max
-        enabled: true
+        model: stepfun/step-3.7-flash:free
+        reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
       aggregator:
         provider: nous
         model: meituan/longcat-2.0:free
-        reasoning_effort: max
-      degraded_reference_policy: loud
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
       fanout: user_turn
     code_visual_deep:
       enabled: true
       reference_models:
       - provider: nous
         model: meituan/longcat-2.0:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
-        reasoning_effort: max
-        enabled: true
-      - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
       aggregator:
         provider: nous
         model: stepfun/step-3.7-flash:free
-        reasoning_effort: max
-      degraded_reference_policy: loud
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
       fanout: user_turn
     logic_visual_deep:
       enabled: true
       reference_models:
       - provider: nous
         model: poolside/laguna-s-2.1:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: max
-        enabled: true
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
       - provider: nous
         model: meituan/longcat-2.0:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: stepfun/step-3.7-flash:free
-        reasoning_effort: max
-      degraded_reference_policy: loud
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
       fanout: user_turn
     auto_moa:
       auto_route:
@@ -125,22 +110,168 @@ moa:
       reference_models:
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
       - provider: nous
         model: upstage/solar-pro4:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: low
       - provider: nous
         model: meituan/longcat-2.0:free
-        reasoning_effort: max
-        enabled: true
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: stepfun/step-3.7-flash:free
-        reasoning_effort: max
-      degraded_reference_policy: loud
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    free_auto_moa:
+      auto_route:
+        code: code_logic_deep
+        logic: logic_deep
+        code_visual: code_visual_deep
+        logic_visual: logic_visual_deep
+        fallback: default
+        context_messages: 8
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: low
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: medium
+      aggregator:
+        provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    pay_default:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: low
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: medium
+      aggregator:
+        provider: nous
+        model: z-ai/glm-5.3-flash
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    pay_code_logic_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: medium
+      - provider: nous
+        model: poolside/laguna-xs-2.1:free
+        reasoning_effort: low
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      aggregator:
+        provider: nous
+        model: deepseek/deepseek-v4-flash
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    pay_logic_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: stepfun/step-3.7-flash:free
+        reasoning_effort: medium
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: medium
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      aggregator:
+        provider: nous
+        model: z-ai/glm-5.3-flash
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    pay_code_visual_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: medium
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: medium
+      - provider: nous
+        model: poolside/laguna-xs-2.1:free
+        reasoning_effort: low
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      aggregator:
+        provider: nous
+        model: qwen/qwen3.8-flash
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    pay_logic_visual_deep:
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: medium
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      - provider: nous
+        model: meituan/longcat-2.0:free
+        reasoning_effort: medium
+      aggregator:
+        provider: nous
+        model: qwen/qwen3.8-flash
+      reference_max_tokens: 600
+      max_tokens: 4096
+      fanout: user_turn
+    pay_auto_moa:
+      auto_route:
+        code: pay_code_logic_deep
+        logic: pay_logic_deep
+        code_visual: pay_code_visual_deep
+        logic_visual: pay_logic_visual_deep
+        fallback: pay_default
+        context_messages: 8
+      enabled: true
+      reference_models:
+      - provider: nous
+        model: inclusionai/ling-3.0-flash-fin:free
+        reasoning_effort: low
+      - provider: nous
+        model: upstage/solar-pro4:free
+        reasoning_effort: low
+      - provider: nous
+        model: poolside/laguna-s-2.1:free
+        reasoning_effort: medium
+      aggregator:
+        provider: nous
+        model: z-ai/glm-5.3-flash
+        reasoning_effort: high
+      reference_max_tokens: 600
+      max_tokens: 4096
       fanout: user_turn
   default_preset: default
   save_traces: true
-  privacy_filter: display
+  privacy_filter: full

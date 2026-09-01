@@ -94,7 +94,7 @@ auto-MoA восстановлен
 | `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
 | `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
 | `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph. |
-| `check-moa-models.py` / `.bat` | Мониторинг живости `:free`-моделей схемы (без API-ключа) + список новых free-моделей в каталоге. |
+| `check-moa-models.py` / `.bat` | Мониторинг живости моделей схемы (free+pay тиры, без API-ключа) + статус гейта `paid_access` + новые free-модели каталога. |
 | `rotate-moa-model.py` / `.bat` | Ротация выпавшей модели во всех конфигах: `rotate-moa-model.bat <dead> <replacement>`. |
 | `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |
 | `USER_GUIDE_RU.txt` | Подробная русская инструкция. |
@@ -129,6 +129,30 @@ hermes -z "ping" --provider moa -m <preset> --cli   # прогнать затр�
 `404 not found` → модели нет в каталоге (REMOVED), `401/429` → модель жива.
 Лог: `%LOCALAPPDATA%\hermes\logs\model-monitor.log`. Каталог free-моделей:
 `https://portal.nousresearch.com/models` и `GET https://inference-api.nousresearch.com/v1/models`.
+
+## Два режима auto-MoA (dual-mode, с 01.09.2026)
+
+| Режим | Пресет | Панель | Агрегаторы |
+|---|---|---|---|
+| Free (дневной) | `free_auto_moa` (=`auto_moa`) | 5 free-пресетов | longcat / laguna-s / step |
+| Pay (тяжёлые задачи) | `pay_auto_moa` | 5 pay-пресетов | glm-5.3-flash / deepseek-v4-flash / qwen3.8-flash |
+
+Переключение: `/model moa:pay_auto_moa` (или `free_auto_moa`) в Desktop/CLI; глобальный
+дефолт — free. В pay-панели платный ТОЛЬКО агрегатор (1 платный вызов за ход, референсы
+free), капы и reasoning-распределение те же.
+
+⚠️ **Pay-режим требует `paid_access`** (Plus-подписка ИЛИ купленные кредиты). Промо-кредиты
+Free-плана платный доступ не открывают; без него pay-пресеты **тихо** работают как free —
+CLI не печатает ни ошибки, ни warning (проверено identity-пробой 01.09.2026). Статус гейта
+показывает `check-moa-models.bat` (строка `account gate: ... paid_access=...`).
+
+### reasoning_effort: почему разные уровни
+
+- **Advisors — low/medium**: их совет обрезается `reference_max_tokens: 600` — reasoning
+  сверх этого бюджета физически не доезжает до агрегатора; wall time хода = самый медленный
+  advisor (docs), поэтому max у всех советников = все ждут самого глубокого (было 86s).
+- **Агрегатор — high**: пишет финальный ответ и tool-calls. `max` не держим сознательно —
+  при деградации качества поднять до `xhigh`/`max` у конкретного пресета.
 
 ### Подписка Nous Plus ($20/мес) — зачем и когда
 
