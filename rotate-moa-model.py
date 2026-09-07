@@ -14,6 +14,7 @@ After running: verify with `hermes config check`, test affected presets
 via `hermes -z "ping" --provider moa -m <preset> --cli`, restart Hermes
 Desktop so the gateway picks up the new config.
 """
+import os
 import shutil
 import sys
 import datetime
@@ -82,7 +83,11 @@ def main():
         shutil.copy2(path, path.with_name(path.name + f".bak-rotate-{stamp}"))
         new_text = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True,
                                   default_flow_style=False, width=200)
-        path.write_text(new_text, encoding="utf-8")
+        # atomic write: tmp file + os.replace, so a killed process cannot
+        # leave a half-written config.yaml (Windows: os.replace is atomic)
+        tmp = path.with_name(path.name + ".tmp-rotate")
+        tmp.write_bytes(new_text.encode("utf-8"))
+        os.replace(tmp, path)
         print(f"[rotate] {path.name} ({path.parent.name}):")
         for c in changes:
             print("   *", c)
