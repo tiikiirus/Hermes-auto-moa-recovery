@@ -85,7 +85,7 @@ if not exist "!PYTHON!" set "PYTHON=python"
 if errorlevel 1 (
   echo [auto_moa] restoring MoA graph in profile %PROFILE%...
   copy /y "!CONFIG_PATH!" "!CONFIG_PATH!.before-auto-moa-restore.bak" >nul || goto :config_backup_failed
-  "!PYTHON!" -c "import sys,yaml; from pathlib import Path; p=Path(sys.argv[1]); b=Path(sys.argv[2]); d=yaml.safe_load(p.read_text(encoding='utf-8')) or {}; s=yaml.safe_load(b.read_text(encoding='utf-8')) or {}; d['moa']=s['moa']; p.write_text(yaml.safe_dump(d,sort_keys=False,allow_unicode=True),encoding='utf-8')" "!CONFIG_PATH!" "%MOA_BACKUP%" || goto :config_restore_failed
+  "!PYTHON!" -c "import sys,yaml; from pathlib import Path; p=Path(sys.argv[1]); b=Path(sys.argv[2]); d=yaml.safe_load(p.read_text(encoding='utf-8')) or {}; s=yaml.safe_load(b.read_text(encoding='utf-8')) or {}; keep=(d.get('moa') or {}).get('default_preset'); bd=(s.get('moa') or {}).get('default_preset'); d['moa']=s['moa']; d['moa']['default_preset']=keep or bd; print('[auto_moa] kept profile default_preset=%s (backup has %s)' % (d['moa'].get('default_preset'), bd)) if keep and keep != bd else None; p.write_text(yaml.safe_dump(d,sort_keys=False,allow_unicode=True),encoding='utf-8')" "!CONFIG_PATH!" "%MOA_BACKUP%" || goto :config_restore_failed
 ) else (
   echo [auto_moa] profile graph is already present.
 )
