@@ -5,10 +5,10 @@ moa:
       reference_models: &moa_default_refs
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: upstage/solar-pro4:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
         reasoning_effort: medium
@@ -16,7 +16,7 @@ moa:
         provider: nous
         model: meituan/longcat-2.0:free
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     code_logic_deep:
@@ -27,15 +27,15 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: poolside/laguna-s-2.1:free
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     logic_deep:
@@ -49,12 +49,12 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: meituan/longcat-2.0:free
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     code_visual_deep:
@@ -68,15 +68,15 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: stepfun/step-3.7-flash:free
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     logic_visual_deep:
@@ -87,7 +87,7 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: meituan/longcat-2.0:free
         reasoning_effort: medium
@@ -95,7 +95,7 @@ moa:
         provider: nous
         model: stepfun/step-3.7-flash:free
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     free_auto_moa:
@@ -109,7 +109,7 @@ moa:
       enabled: true
       reference_models: *moa_default_refs
       aggregator: *moa_default_agg
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     pay_default:
@@ -117,10 +117,10 @@ moa:
       reference_models: &moa_pay_refs
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: upstage/solar-pro4:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
         reasoning_effort: medium
@@ -128,7 +128,7 @@ moa:
         provider: nous
         model: z-ai/glm-5.3-flash
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     pay_code_logic_deep:
@@ -139,15 +139,15 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: z-ai/glm-5.3-flash
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     pay_logic_deep:
@@ -161,12 +161,12 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: z-ai/glm-5.3-flash
         reasoning_effort: high
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     pay_code_visual_deep:
@@ -180,14 +180,15 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       aggregator:
         provider: nous
         model: z-ai/glm-5.3-flash
-      reference_max_tokens: 600
+        reasoning_effort: high
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     pay_logic_visual_deep:
@@ -198,14 +199,15 @@ moa:
         reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
+        reasoning_effort: medium
       - provider: nous
         model: meituan/longcat-2.0:free
         reasoning_effort: medium
       aggregator:
         provider: nous
         model: z-ai/glm-5.3-flash
-      reference_max_tokens: 600
+        reasoning_effort: high
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
     pay_auto_moa:
@@ -219,7 +221,7 @@ moa:
       enabled: true
       reference_models: *moa_pay_refs
       aggregator: *moa_pay_agg
-      reference_max_tokens: 600
+      reference_max_tokens: 2048
       max_tokens: 4096
       fanout: user_turn
   default_preset: default
