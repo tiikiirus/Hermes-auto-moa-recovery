@@ -184,6 +184,14 @@ def main():
             print("[monitor] WARNING: pay_auto_moa presets exist but paid_access=false —")
             print("           they SILENTLY run free models. Buy Plus subscription or")
             print("           PAYG credits at https://portal.nousresearch.com to enable pay mode.")
+    else:
+        # fetch_account_gate() swallows all failures (no/expired token, portal
+        # endpoint or shape change). Silence here once hid a live subscription,
+        # so say so loudly instead of printing nothing.
+        print()
+        print("[monitor] account gate: UNAVAILABLE (portal check failed — token")
+        print("           missing/expired or endpoint changed). paid_access UNKNOWN:")
+        print("           verify spend in https://portal.nousresearch.com instead.")
 
     if catalog is not None:
         catalog_free = sorted(m for m in catalog if m.endswith(":free"))
