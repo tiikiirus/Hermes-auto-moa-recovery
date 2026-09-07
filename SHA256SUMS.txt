@@ -1,4 +1,4 @@
-3ec90f59863ea7bb191ffd30edaa4a29a865d609dcc5c654554468a18edc3246 *auto-moa-current.patch
+ae287215c0e155d3f2848ac224e93a9baffa469b5c2636b9df356e4f9ecafbaf *auto-moa-current.patch
 cac46761039977f79538bdf36c5706e8ec7ab5c3d20460ebc5d6ecd051c88dce *auto-moa-hook.sh
 8e72979b307a500ef8e0cc1f78225c75106c2e5e864f6e9b8dc10e5bafc3663d *auto-moa-watchdog.bat
 aacf9e75c9907acd0164f59c3cfd1e24da3fe03bf6f5fae2a5e3f7cce915945f *hermes-update.bat

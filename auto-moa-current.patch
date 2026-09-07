@@ -193,10 +193,10 @@ index 000000000..d999fdf43
 +>>>>>>     return AutoRouteDecision(preset=preset, category=category, reason=reason)
 diff --git a/agent/moa_auto_router.py b/agent/moa_auto_router.py
 new file mode 100644
-index 000000000..a6dc01977
+index 000000000..ae6729e4c
 --- /dev/null
 +++ b/agent/moa_auto_router.py
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,471 @@
 +"""Auto-MoA route selection helpers.
 +
 +These helpers let a virtual ``auto_moa`` preset resolve to a concrete
@@ -401,12 +401,19 @@ index 000000000..a6dc01977
 +class AutoRouteDecision:
 +    """Resolved auto-route target for one user turn."""
 +
-+    __slots__ = ("preset", "category", "reason")
++    __slots__ = ("preset", "category", "reason", "complexity")
 +
-+    def __init__(self, preset: str, category: str, reason: str) -> None:
++    def __init__(
++        self,
++        preset: str,
++        category: str,
++        reason: str,
++        complexity: str = "standard",
++    ) -> None:
 +        self.preset = preset
 +        self.category = category
 +        self.reason = reason
++        self.complexity = complexity
 +
 +
 +# Marker appended by context_references when @url/@file material is attached
@@ -527,12 +534,145 @@ index 000000000..a6dc01977
 +        preset = fallback
 +
 +    reason = f"auto route → {category}"
-+    return AutoRouteDecision(preset=preset, category=category, reason=reason)
++    return AutoRouteDecision(
++        preset=preset,
++        category=category,
++        reason=reason,
++        complexity=classify_turn_complexity(messages),
++    )
++
++
++# ---------------------------------------------------------------------------
++# Per-turn complexity → reasoning adequacy
++# ---------------------------------------------------------------------------
++# Static per-preset reasoning_effort over-spends on trivial follow-ups
++# ("ок", "делай") and under-spends on hard turns (screenshot + docs +
++# code). The router already extracts everything needed, so it also grades
++# the turn once; moa_loop only applies the grade to COPIES of slot dicts.
++
++_TRIVIAL_MAX_WORDS = 8
++_COMPLEX_LONG_WORDS = 100
++_COMPLEX_CODE_WORDS = 30
++
++# Must stay in sync with hermes_constants.parse_reasoning_effort levels.
++_EFFORT_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
++
++
++def _last_user_raw_text(messages: list[dict[str, Any]]) -> str:
++    """User words INCLUDING attached @url/@file context (for attachment detection)."""
++    last_user = next(
++        (
++            message
++            for message in reversed(messages)
++            if isinstance(message, dict) and message.get("role") == "user"
++        ),
++        {},
++    )
++    content = last_user.get("content")
++    if isinstance(content, list):
++        return " ".join(
++            part.get("text", "")
++            for part in content
++            if isinstance(part, dict) and part.get("type") == "text"
++        )
++    return str(content or "")
++
++
++def classify_turn_complexity(messages: list[dict[str, Any]]) -> str:
++    """Grade one user turn as "trivial" | "standard" | "complex".
++
++    - trivial: a few words, no visual, no attached context, no code —
++      e.g. "ок", "делай", "продолжай".
++    - complex: long text, or fresh visual, or attached context, or a
++      substantive code task — e.g. screenshot analysis with docs.
++    - standard: everything else.
++    """
++    last_user = next(
++        (
++            message
++            for message in reversed(messages)
++            if isinstance(message, dict) and message.get("role") == "user"
++        ),
++        {},
++    )
++    raw = _last_user_raw_text(messages)
++    has_attachment = _ATTACHED_CONTEXT_MARKER in raw
++    text = raw.split(_ATTACHED_CONTEXT_MARKER, 1)[0]
++    words = len(text.split())
++    has_visual = _has_visual_content(last_user)
++    has_code = _has_any_token(text, "code", "code_ru")
++    if (
++        words <= _TRIVIAL_MAX_WORDS
++        and not has_visual
++        and not has_attachment
++        and not has_code
++    ):
++        return "trivial"
++    if (
++        words > _COMPLEX_LONG_WORDS
++        or has_visual
++        or has_attachment
++        or (has_code and words > _COMPLEX_CODE_WORDS)
++    ):
++        return "complex"
++    return "standard"
++
++
++def _effort_index(level: Any) -> int | None:
++    """Position of a reasoning level in _EFFORT_ORDER, or None if not adjustable.
++
++    Disabled ("none"/False/...) and unrecognized values are NOT adjustable:
++    forcing "low" onto a deliberately disabled slot would enable reasoning
++    the preset author switched off.
++    """
++    if not isinstance(level, str):
++        return None
++    key = level.strip().lower()
++    return _EFFORT_ORDER.index(key) if key in _EFFORT_ORDER else None
++
++
++def adjust_slots_for_complexity(
++    reference_models: list[dict[str, Any]],
++    aggregator: dict[str, Any],
++    complexity: str,
++) -> tuple[list[dict[str, Any]], dict[str, Any]]:
++    """Return slot COPIES with reasoning_effort scaled to turn complexity.
++
++    Monotonic by design, so explicit pins are only ever moved in the safe
++    direction and unpinned/disabled slots keep their default/global path:
++    - "trivial": downgrade-only (advisors→low, aggregator→medium).
++    - "complex": upgrade-only (advisors one notch, cap high; aggregator→xhigh).
++    - "standard"/unknown: untouched copies.
++    Never mutates the inputs — preset config must not leak across turns.
++    """
++    refs = [dict(slot) for slot in (reference_models or [])]
++    agg = dict(aggregator or {})
++    if complexity == "trivial":
++        for slot in refs:
++            idx = _effort_index(slot.get("reasoning_effort"))
++            if idx is not None and idx > _EFFORT_ORDER.index("low"):
++                slot["reasoning_effort"] = "low"
++        if "reasoning_effort" in agg:
++            idx = _effort_index(agg.get("reasoning_effort"))
++            if idx is not None and idx > _EFFORT_ORDER.index("medium"):
++                agg["reasoning_effort"] = "medium"
++    elif complexity == "complex":
++        for slot in refs:
++            idx = _effort_index(slot.get("reasoning_effort"))
++            if idx is not None:
++                slot["reasoning_effort"] = _EFFORT_ORDER[
++                    min(idx + 1, _EFFORT_ORDER.index("high"))
++                ]
++        if "reasoning_effort" in agg:
++            idx = _effort_index(agg.get("reasoning_effort"))
++            if idx is not None and idx < _EFFORT_ORDER.index("xhigh"):
++                agg["reasoning_effort"] = "xhigh"
++    return refs, agg
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index d783afd99..ced7fd947 100644
+index d783afd99..f5a80d316 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
-@@ -19,6 +19,13 @@ from typing import Any
+@@ -19,6 +19,15 @@ from typing import Any
  
  from agent.auxiliary_client import call_llm
  from agent.message_content import flatten_message_text
@@ -540,13 +680,15 @@ index d783afd99..ced7fd947 100644
 +    AutoRouteDecision,
 +    _active_turn_visual_parts,
 +    _restore_active_turn_visual_parts,
++    adjust_slots_for_complexity,
 +    auto_route_turn_fingerprint,
++    classify_turn_complexity,
 +    select_auto_moa_route,
 +)
  from agent.transports import get_transport
  
  logger = logging.getLogger(__name__)
-@@ -1202,13 +1209,20 @@ def _preset_temperature(preset: dict[str, Any], key: str) -> float | None:
+@@ -1202,13 +1211,20 @@ def _preset_temperature(preset: dict[str, Any], key: str) -> float | None:
  def _is_failed_reference(text: str) -> bool:
      """Return whether a reference output is an internal failure/skip sentinel.
  
@@ -572,7 +714,26 @@ index d783afd99..ced7fd947 100644
  
  
  def _successful_references(
-@@ -1551,6 +1565,7 @@ class MoAChatCompletions:
+@@ -1266,6 +1282,18 @@ def aggregate_moa_context(
+     user interrupt — see ``_run_references_parallel``'s docstring.
+     """
+     reference_models = [slot for slot in reference_models if slot.get("enabled", True)]
++    # Same per-turn adequacy as the interactive create() path: grade this
++    # one-shot request and scale slot-pinned efforts on copies.
++    try:
++        _one_shot_complexity = classify_turn_complexity(
++            [{"role": "user", "content": user_prompt}]
++        )
++    except Exception:  # pragma: no cover - adequacy must never break a turn
++        _one_shot_complexity = "standard"
++    if _one_shot_complexity != "standard":
++        reference_models, aggregator = adjust_slots_for_complexity(
++            reference_models, aggregator, _one_shot_complexity
++        )
+     reference_outputs: list[tuple[str, str, Any]] = []
+     ref_messages = _reference_messages(api_messages)
+     reference_outputs = _run_references_parallel(
+@@ -1551,6 +1579,7 @@ class MoAChatCompletions:
          #                        acts; phase="reference" mirrors ``moa.progress``
          #                        so listeners can rely on a single event family)
          #   "moa.aggregating" kwargs: aggregator (label), ref_count
@@ -580,7 +741,7 @@ index d783afd99..ced7fd947 100644
          # Never raises into the model call — display is best-effort.
          self.reference_callback = reference_callback
          # Back-reference to the owning AIAgent, so the reference fan-out can
-@@ -1608,6 +1623,14 @@ class MoAChatCompletions:
+@@ -1608,6 +1637,17 @@ class MoAChatCompletions:
          # Normalized moa.privacy_filter mode for the current turn ('' |
          # 'display' | 'full'), refreshed from config on every create().
          self._privacy_mode: str = ""
@@ -589,13 +750,16 @@ index d783afd99..ced7fd947 100644
 +        # selected before the first model call of each user turn.
 +        self.last_resolved_preset_name: str = self.preset_name
 +        self.last_auto_route_decision: Any = None
++        # Per-turn complexity grade applied to slot efforts ("trivial" |
++        # "standard" | "complex"); refreshed from messages on every create().
++        self._last_turn_complexity: str = "standard"
 +        self._auto_route_turn_sig: str | None = None
 +        self._auto_route_turn_decision: Any = None
 +        self._auto_route_previous_category: str | None = None
  
      def consume_reference_usage(self) -> tuple[Any, Any]:
          """Pop pending reference-fan-out usage + cost, resetting both to empty.
-@@ -1707,6 +1730,7 @@ class MoAChatCompletions:
+@@ -1707,6 +1747,7 @@ class MoAChatCompletions:
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output,
                  aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -603,7 +767,7 @@ index d783afd99..ced7fd947 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1720,7 +1744,7 @@ class MoAChatCompletions:
+@@ -1720,7 +1761,7 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -612,7 +776,7 @@ index d783afd99..ced7fd947 100644
          """Run the advisor fan-out and return the exact aggregator request.
  
          The normal agent loop needs to measure this augmented prompt before its
-@@ -1728,7 +1752,11 @@ class MoAChatCompletions:
+@@ -1728,7 +1769,11 @@ class MoAChatCompletions:
          when the loop supplies the returned private object back to ``create()``,
          the advisor fan-out is not repeated.
          """
@@ -625,7 +789,7 @@ index d783afd99..ced7fd947 100644
  
      def rebase_prepared_request(
          self, prepared: dict[str, Any], messages: list[dict[str, Any]]
-@@ -1742,6 +1770,10 @@ class MoAChatCompletions:
+@@ -1742,6 +1787,10 @@ class MoAChatCompletions:
          """
          guidance = prepared.get("guidance")
          agg_messages = [dict(message) for message in messages]
@@ -636,7 +800,7 @@ index d783afd99..ced7fd947 100644
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
          return {**prepared, "messages": agg_messages}
-@@ -1898,6 +1930,7 @@ class MoAChatCompletions:
+@@ -1898,6 +1947,7 @@ class MoAChatCompletions:
          return _agg_response
  
      def create(self, **api_kwargs: Any) -> Any:
@@ -644,7 +808,7 @@ index d783afd99..ced7fd947 100644
          prepared_request = api_kwargs.pop("_moa_prepared_request", None)
          if prepared_request is not None:
              if not isinstance(prepared_request, dict):
-@@ -1905,34 +1938,126 @@ class MoAChatCompletions:
+@@ -1905,34 +1955,126 @@ class MoAChatCompletions:
              return self._call_prepared_aggregator(prepared_request, api_kwargs)
  
          from hermes_cli.config import get_config_path, load_config
@@ -798,7 +962,28 @@ index d783afd99..ced7fd947 100644
          # Privacy filter mode: '' (off, default) | 'display' | 'full'. See
          # coerce_privacy_filter / the pattern block at the top of this module.
          # Remembered on self so _call_prepared_aggregator (which may run on a
-@@ -2185,10 +2310,20 @@ class MoAChatCompletions:
+@@ -1946,6 +2088,20 @@ class MoAChatCompletions:
+             if slot.get("enabled", True)
+         ]
+         aggregator = preset.get("aggregator") or {}
++        # Per-turn reasoning adequacy: scale slot-pinned efforts to this
++        # turn's complexity (trivial → save with advisors-low/aggregator-
++        # medium; complex → deepen with advisors+1-capped-high/aggregator-
++        # xhigh). Operates on COPIES — preset config is never mutated, so
++        # nothing leaks across turns. Unpinned slots keep their default /
++        # global resolution path untouched (see _aggregator_reasoning_config).
++        try:
++            self._last_turn_complexity = classify_turn_complexity(messages)
++        except Exception:  # pragma: no cover - adequacy must never break a turn
++            self._last_turn_complexity = "standard"
++        if self._last_turn_complexity != "standard":
++            reference_models, aggregator = adjust_slots_for_complexity(
++                reference_models, aggregator, self._last_turn_complexity
++            )
+         # Expose the resolved aggregator slot so session cost accounting can
+         # price the aggregator's acting turn at its REAL model/provider. The
+         # agent's model/provider on the MoA path are the virtual preset name
+@@ -2185,10 +2341,23 @@ class MoAChatCompletions:
              else:
                  _trace_refs = list(reference_outputs)
              self._pending_trace = {
@@ -813,6 +998,9 @@ index d783afd99..ced7fd947 100644
 +                        "resolved_preset": effective_preset_name,
 +                        "category": self.last_auto_route_decision.category,
 +                        "reason": self.last_auto_route_decision.reason,
++                        "complexity": getattr(
++                            self, "_last_turn_complexity", "standard"
++                        ),
 +                    }
 +                    if self.last_auto_route_decision is not None
 +                    else None
@@ -820,7 +1008,7 @@ index d783afd99..ced7fd947 100644
              }
              # Derived from the same privacy-redacted _trace_refs, so an active
              # privacy mode redacts the observability payload too.
-@@ -2290,7 +2425,7 @@ class MoAChatCompletions:
+@@ -2290,7 +2459,7 @@ class MoAChatCompletions:
                  joined = f"{joined}\n\n{degraded}" if joined else degraded
              guidance = (
                  "[Mixture of Agents reference context]\n"
@@ -829,7 +1017,7 @@ index d783afd99..ced7fd947 100644
                  f"Aggregator/acting model: {_slot_label(aggregator)}\n"
                  f"References: {', '.join(label for label, _, _ in _agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
-@@ -2417,6 +2552,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
+@@ -2417,6 +2586,15 @@ def build_moa_facade(agent, preset_name: Any = None) -> MoAClient:
                      moa_refs_done=kwargs.get("refs_done"),
                      moa_refs_total=kwargs.get("refs_total"),
                  )
@@ -1086,10 +1274,10 @@ index 24d36e4a1..02486771c 100644
  def normalize_moa_config(raw: Any) -> dict[str, Any]:
 diff --git a/tests/agent/test_moa_auto_router.py b/tests/agent/test_moa_auto_router.py
 new file mode 100644
-index 000000000..b7b0f79e9
+index 000000000..b6f24e21a
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_router.py
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,556 @@
 +"""Tests for auto-MoA route selection logic."""
 +
 +import pytest
@@ -1098,7 +1286,9 @@ index 000000000..b7b0f79e9
 +    _active_turn_visual_parts,
 +    _restore_active_turn_visual_parts,
 +    _VISUAL_PART_TYPES,
++    adjust_slots_for_complexity,
 +    auto_route_turn_fingerprint,
++    classify_turn_complexity,
 +    select_auto_moa_route,
 +)
 +
@@ -1513,6 +1703,137 @@ index 000000000..b7b0f79e9
 +        ]
 +        decision = select_auto_moa_route(messages, auto_route)
 +        assert decision.category == "code"
++
++
++class TestClassifyTurnComplexity:
++    """Turns are graded trivial/standard/complex for reasoning adequacy."""
++
++    def test_short_plain_followup_is_trivial(self):
++        assert classify_turn_complexity([{"role": "user", "content": "делай"}]) == "trivial"
++        assert classify_turn_complexity([{"role": "user", "content": "ок"}]) == "trivial"
++
++    def test_short_code_request_is_not_trivial(self):
++        # "почини баг" is short but needs real reasoning — keep configured effort.
++        assert (
++            classify_turn_complexity([{"role": "user", "content": "почини баг"}])
++            == "standard"
++        )
++
++    def test_medium_question_is_standard(self):
++        messages = [
++            {"role": "user", "content": "какие у нас сейчас статусы по всем задачам в wiki проекта?"}
++        ]
++        assert classify_turn_complexity(messages) == "standard"
++
++    def test_long_text_is_complex(self):
++        messages = [{"role": "user", "content": "слово " * 101}]
++        assert classify_turn_complexity(messages) == "complex"
++
++    def test_fresh_visual_is_complex(self):
++        messages = [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "проверь аномалию"},
++                    {"type": "image_url", "image_url": {"url": "data:..."}},
++                ],
++            }
++        ]
++        assert classify_turn_complexity(messages) == "complex"
++
++    def test_attachment_is_complex(self):
++        messages = [
++            {
++                "role": "user",
++                "content": "глянь\n\n--- Attached Context ---\n\nкакой-то текст",
++            }
++        ]
++        assert classify_turn_complexity(messages) == "complex"
++
++    def test_substantive_code_task_is_complex(self):
++        messages = [
++            {"role": "user", "content": "напиши функцию сортировки " + "пожалуйста " * 30}
++        ]
++        assert classify_turn_complexity(messages) == "complex"
++
++    def test_decision_carries_complexity(self, auto_route):
++        messages = [{"role": "user", "content": "делай"}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.complexity == "trivial"
++        messages = [{"role": "user", "content": "слово " * 101}]
++        decision = select_auto_moa_route(messages, auto_route)
++        assert decision.complexity == "complex"
++
++
++class TestAdjustSlotsForComplexity:
++    """Effort scaling is monotonic, copy-only, and respects pins."""
++
++    def test_standard_returns_untouched_copies(self):
++        refs = [{"model": "m", "reasoning_effort": "medium"}]
++        agg = {"model": "a", "reasoning_effort": "high"}
++        new_refs, new_agg = adjust_slots_for_complexity(refs, agg, "standard")
++        assert new_refs == refs and new_agg == agg
++        assert new_refs is not refs and new_agg is not agg
++
++    def test_inputs_never_mutated(self):
++        refs = [{"model": "m", "reasoning_effort": "high"}]
++        agg = {"model": "a", "reasoning_effort": "high"}
++        adjust_slots_for_complexity(refs, agg, "trivial")
++        adjust_slots_for_complexity(refs, agg, "complex")
++        assert refs == [{"model": "m", "reasoning_effort": "high"}]
++        assert agg == {"model": "a", "reasoning_effort": "high"}
++
++    def test_trivial_downgrades_only(self):
++        refs = [
++            {"model": "a", "reasoning_effort": "medium"},
++            {"model": "b", "reasoning_effort": "low"},
++            {"model": "c", "reasoning_effort": "none"},
++            {"model": "d"},
++        ]
++        agg = {"model": "z", "reasoning_effort": "high"}
++        new_refs, new_agg = adjust_slots_for_complexity(refs, agg, "trivial")
++        assert [s.get("reasoning_effort") for s in new_refs] == [
++            "low",
++            "low",
++            "none",
++            None,
++        ]
++        assert new_agg["reasoning_effort"] == "medium"
++
++    def test_trivial_keeps_low_aggregator(self):
++        _, new_agg = adjust_slots_for_complexity(
++            [], {"model": "z", "reasoning_effort": "low"}, "trivial"
++        )
++        assert new_agg["reasoning_effort"] == "low"
++
++    def test_complex_upgrades_capped(self):
++        refs = [
++            {"model": "a", "reasoning_effort": "low"},
++            {"model": "b", "reasoning_effort": "medium"},
++            {"model": "c", "reasoning_effort": "high"},
++            {"model": "d", "reasoning_effort": "none"},
++            {"model": "e"},
++        ]
++        agg = {"model": "z", "reasoning_effort": "high"}
++        new_refs, new_agg = adjust_slots_for_complexity(refs, agg, "complex")
++        assert [s.get("reasoning_effort") for s in new_refs] == [
++            "medium",
++            "high",
++            "high",
++            "none",
++            None,
++        ]
++        assert new_agg["reasoning_effort"] == "xhigh"
++
++    def test_complex_keeps_max_aggregator(self):
++        _, new_agg = adjust_slots_for_complexity(
++            [], {"model": "z", "reasoning_effort": "max"}, "complex"
++        )
++        assert new_agg["reasoning_effort"] == "max"
++
++    def test_unpinned_aggregator_keeps_global_path(self):
++        _, new_agg = adjust_slots_for_complexity([], {"model": "z"}, "trivial")
++        assert "reasoning_effort" not in new_agg
 diff --git a/tests/agent/test_moa_empty_reference.py b/tests/agent/test_moa_empty_reference.py
 new file mode 100644
 index 000000000..48f6285bf
