@@ -130,6 +130,12 @@ hermes -z "ping" --provider moa -m <preset> --cli   # прогнать затр�
 Лог: `%LOCALAPPDATA%\hermes\logs\model-monitor.log`. Каталог free-моделей:
 `https://portal.nousresearch.com/models` и `GET https://inference-api.nousresearch.com/v1/models`.
 
+### Где лежат MoA-трейсы
+
+`moa.save_traces: true` пишет **per-profile**: `%LOCALAPPDATA%\hermes\profiles\<profile>\moa-traces\<session_id>.jsonl`
+(каждая строка — полный ход: входы/выходы референсов, вход/выход агрегатора, `routing`).
+Глобальный `%LOCALAPPDATA%\hermes\moa-traces\` — legacy, свежих сессий там нет, смотри в профиле.
+
 ## Два режима auto-MoA (dual-mode, с 01.09.2026)
 
 | Режим | Пресет | Панель | Агрегаторы |
