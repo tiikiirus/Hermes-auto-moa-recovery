@@ -24,18 +24,32 @@ echo Usage: %~nx0 [--check^|update^|repair]
 exit /b 1
 
 :check
-if exist "%REPO%\agent\moa_auto_router.py" (
-  git -C "%REPO%" apply --reverse --check "%PATCH%" >nul 2>&1
-  if not errorlevel 1 (
-    echo [auto-moa] HEALTHY
-    exit /b 0
-  )
-)
-echo [auto-moa] MISSING or DIVERGED
+if not exist "%REPO%\agent\moa_auto_router.py" goto :check_failed
+git -C "%REPO%" apply --reverse --check "%PATCH%" >nul 2>&1
+if errorlevel 1 goto :check_failed
+set "SYNC=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\tools\moa_sync.py"
+if not exist "%SYNC%" goto :check_failed
+where python >nul 2>&1 || goto :check_failed
+python "%SYNC%" --check >nul 2>&1
+if errorlevel 1 goto :check_failed
+echo [auto-moa] HEALTHY
+exit /b 0
+
+:check_failed
+echo [auto-moa] MISSING, DIVERGED, or CONFIG DRIFTED
 exit /b 1
 
 :repair
 call "%WATCHDOG%"
+set "REPAIR_RC=%ERRORLEVEL%"
+if not "%REPAIR_RC%"=="0" exit /b %REPAIR_RC%
+set "SYNC=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\tools\moa_sync.py"
+if not exist "%SYNC%" (
+  echo [auto-moa] ERROR: sync tool not found: %SYNC%
+  exit /b 1
+)
+where python >nul 2>&1 || exit /b 1
+python "%SYNC%" --sync
 exit /b %ERRORLEVEL%
 
 :update
