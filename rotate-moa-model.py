@@ -31,6 +31,7 @@ CONFIGS = [
     HERMES_DIR / "profiles/aiqa/config.yaml",
     HERMES_DIR / "profiles/fantrax/config.yaml",
     HERMES_DIR / "profiles/mxstat/config.yaml",
+    HERMES_DIR / "profiles/auto-moa/config.yaml",
 ]
 BACKUP_YAML = RECOVERY / "auto-moa-moa-section.yaml"
 
@@ -67,6 +68,7 @@ def main():
         return 2
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     touched = False
+    rotated_backup = False
     for path in CONFIGS + ([BACKUP_YAML] if BACKUP_YAML.exists() else []):
         if not path.exists():
             continue
@@ -80,6 +82,7 @@ def main():
         if not changes:
             continue
         touched = True
+        rotated_backup = rotated_backup or path == BACKUP_YAML
         shutil.copy2(path, path.with_name(path.name + f".bak-rotate-{stamp}"))
         new_text = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True,
                                   default_flow_style=False, width=200)
@@ -91,6 +94,25 @@ def main():
         print(f"[rotate] {path.name} ({path.parent.name}):")
         for c in changes:
             print("   *", c)
+    if touched and rotated_backup:
+        sums = RECOVERY / "SHA256SUMS.txt"
+        if sums.exists():
+            import hashlib
+
+            target = BACKUP_YAML.name
+            new_line = hashlib.sha256(BACKUP_YAML.read_bytes()).hexdigest() + " *" + target
+            lines = sums.read_text(encoding="utf-8").splitlines()
+            replaced = False
+            for i, ln in enumerate(lines):
+                if ln.split("*", 1)[-1].strip() == target:
+                    lines[i] = new_line
+                    replaced = True
+                    break
+            if replaced:
+                sums.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+                print(f"[rotate] SHA256SUMS.txt: {target} entry updated")
+            else:
+                print(f"[rotate] WARNING: no {target} entry in SHA256SUMS.txt; update it manually")
     if not touched:
         print(f"[rotate] model {dead} not found anywhere; nothing changed")
         return 1
