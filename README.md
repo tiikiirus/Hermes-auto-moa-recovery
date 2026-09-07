@@ -111,7 +111,7 @@ Free-модели Nous — ротация промо, не контракт: `te
 | `code_logic_deep` | `poolside/laguna-s-2.1:free` | laguna-s умрёт → 1 |
 | `code_visual_deep`, `logic_visual_deep` | `stepfun/step-3.7-flash:free` | step умрёт → 2 |
 
-Референсы деградируют мягко (turn не роняется): laguna-xs, solar-pro4, ling-3.0-flash-fin.
+Референсы деградируют мягко (turn не роняется): laguna-xs, ling-3.0-flash-fin/sante, laguna-s-2.1. Слабейшая по живому пробингу (07.09: 4 токена, неверный ответ, 0 reasoning) `upstage/solar-pro4:free` заменена на `inclusionai/ling-3.0-flash-sante:free`; каталог всех моделей конфига сверяется с провайдером через `tools/moa_sync.py --check --catalog`.
 
 ### Мониторинг и ротация
 

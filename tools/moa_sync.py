@@ -129,14 +129,72 @@ def needs_sync(data: dict[str, Any], canonical_moa: dict[str, Any]) -> bool:
     return _normalize(data.get("moa") or {}) != _normalize(desired)
 
 
+def catalog_models() -> set[str] | None:
+    """Fetch the live provider model catalog; None if unreachable."""
+    import json
+    import urllib.request
+
+    auth_path = Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "auth.json"
+    if not auth_path.exists():
+        return None
+    try:
+        auth = json.loads(auth_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    def find_tokens(obj: Any) -> list[str]:
+        out: list[str] = []
+        if isinstance(obj, dict):
+            for key, val in obj.items():
+                if "token" in key.lower() and isinstance(val, str) and len(val) > 20:
+                    out.append(val)
+                else:
+                    out.extend(find_tokens(val))
+        elif isinstance(obj, list):
+            for val in obj:
+                out.extend(find_tokens(val))
+        return out
+
+    for token in find_tokens(auth):
+        try:
+            req = urllib.request.Request(
+                "https://inference-api.nousresearch.com/v1/models",
+                headers={"Authorization": f"Bearer {token}", "User-Agent": "hermes-moa-sync"},
+            )
+            data = json.loads(urllib.request.urlopen(req, timeout=30).read())
+            return {m["id"] for m in data.get("data", [])}
+        except Exception:
+            continue
+    return None
+
+
+def configured_models(data: dict[str, Any]) -> set[str]:
+    """All model ids referenced by a profile config."""
+    names: set[str] = set()
+    for preset in (data.get("moa") or {}).get("presets", {}).values():
+        preset = preset or {}
+        agg = (preset.get("aggregator") or {}).get("model")
+        if agg:
+            names.add(agg)
+        for ref in preset.get("reference_models") or []:
+            if ref.get("model"):
+                names.add(ref["model"])
+    return names
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--check", action="store_true", help="check drift without changing files")
     parser.add_argument("--sync", action="store_true", help="backup and synchronize all profiles")
+    parser.add_argument("--catalog", action="store_true", help="also verify configured models exist in the provider catalog")
     args = parser.parse_args()
     if args.check == args.sync:
         parser.error("choose exactly one of --check or --sync")
+
+    catalog: set[str] | None = catalog_models() if args.catalog else None
+    if args.catalog and catalog is None:
+        print("catalog: UNREACHABLE (skipping catalog checks)")
 
     canonical_path = args.repo / "auto-moa-moa-section.yaml"
     canonical = load_yaml(canonical_path)
@@ -176,6 +234,9 @@ def main() -> int:
         graph_same = profile_graph(data) == canonical_moa
         exact_same = not needs_sync(data, canonical_moa)
         errors = semantic_checks(name, data)
+        if catalog is not None:
+            for missing in sorted(configured_models(data) - catalog):
+                errors.append(f"model not in provider catalog: {missing}")
         if not exact_same:
             changed += 1
         if args.sync and (not exact_same or errors):
@@ -183,6 +244,9 @@ def main() -> int:
             atomic_write(path, dump_yaml(data))
             data = load_yaml(path)
             errors = semantic_checks(name, data)
+            if catalog is not None:
+                for missing in sorted(configured_models(data) - catalog):
+                    errors.append(f"model not in provider catalog: {missing}")
             graph_same = profile_graph(data) == canonical_moa
             exact_same = not needs_sync(data, canonical_moa)
         if errors or not exact_same:

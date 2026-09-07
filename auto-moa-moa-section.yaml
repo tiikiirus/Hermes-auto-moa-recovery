@@ -7,7 +7,7 @@ moa:
         model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: medium
       - provider: nous
-        model: upstage/solar-pro4:free
+        model: inclusionai/ling-3.0-flash-sante:free
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
@@ -119,7 +119,7 @@ moa:
         model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: medium
       - provider: nous
-        model: upstage/solar-pro4:free
+        model: inclusionai/ling-3.0-flash-sante:free
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
