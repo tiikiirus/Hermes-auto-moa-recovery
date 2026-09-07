@@ -193,10 +193,10 @@ index 000000000..d999fdf43
 +>>>>>>     return AutoRouteDecision(preset=preset, category=category, reason=reason)
 diff --git a/agent/moa_auto_router.py b/agent/moa_auto_router.py
 new file mode 100644
-index 000000000..ae6729e4c
+index 000000000..a90f37b13
 --- /dev/null
 +++ b/agent/moa_auto_router.py
-@@ -0,0 +1,471 @@
+@@ -0,0 +1,459 @@
 +"""Auto-MoA route selection helpers.
 +
 +These helpers let a virtual ``auto_moa`` preset resolve to a concrete
@@ -401,19 +401,12 @@ index 000000000..ae6729e4c
 +class AutoRouteDecision:
 +    """Resolved auto-route target for one user turn."""
 +
-+    __slots__ = ("preset", "category", "reason", "complexity")
++    __slots__ = ("preset", "category", "reason")
 +
-+    def __init__(
-+        self,
-+        preset: str,
-+        category: str,
-+        reason: str,
-+        complexity: str = "standard",
-+    ) -> None:
++    def __init__(self, preset: str, category: str, reason: str) -> None:
 +        self.preset = preset
 +        self.category = category
 +        self.reason = reason
-+        self.complexity = complexity
 +
 +
 +# Marker appended by context_references when @url/@file material is attached
@@ -534,12 +527,7 @@ index 000000000..ae6729e4c
 +        preset = fallback
 +
 +    reason = f"auto route → {category}"
-+    return AutoRouteDecision(
-+        preset=preset,
-+        category=category,
-+        reason=reason,
-+        complexity=classify_turn_complexity(messages),
-+    )
++    return AutoRouteDecision(preset=preset, category=category, reason=reason)
 +
 +
 +# ---------------------------------------------------------------------------
@@ -1274,10 +1262,10 @@ index 24d36e4a1..02486771c 100644
  def normalize_moa_config(raw: Any) -> dict[str, Any]:
 diff --git a/tests/agent/test_moa_auto_router.py b/tests/agent/test_moa_auto_router.py
 new file mode 100644
-index 000000000..b6f24e21a
+index 000000000..925a95e3d
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_router.py
-@@ -0,0 +1,556 @@
+@@ -0,0 +1,548 @@
 +"""Tests for auto-MoA route selection logic."""
 +
 +import pytest
@@ -1755,14 +1743,6 @@ index 000000000..b6f24e21a
 +            {"role": "user", "content": "напиши функцию сортировки " + "пожалуйста " * 30}
 +        ]
 +        assert classify_turn_complexity(messages) == "complex"
-+
-+    def test_decision_carries_complexity(self, auto_route):
-+        messages = [{"role": "user", "content": "делай"}]
-+        decision = select_auto_moa_route(messages, auto_route)
-+        assert decision.complexity == "trivial"
-+        messages = [{"role": "user", "content": "слово " * 101}]
-+        decision = select_auto_moa_route(messages, auto_route)
-+        assert decision.complexity == "complex"
 +
 +
 +class TestAdjustSlotsForComplexity:

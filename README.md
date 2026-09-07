@@ -49,7 +49,7 @@ hermes-update --repair
 ### Выбор пресета
 
 ```powershell
-/model moa:auto_moa
+/model moa:free_auto_moa
 ```
 
 ### Что делает auto-MoA
@@ -109,7 +109,7 @@ Free-модели Nous — ротация промо, не контракт: `te
 |---|---|---|
 | `default`, `logic_deep` | `meituan/longcat-2.0:free` | longcat умрёт → 2 |
 | `code_logic_deep` | `poolside/laguna-s-2.1:free` | laguna-s умрёт → 1 |
-| `code_visual_deep`, `logic_visual_deep`, `auto_moa` | `stepfun/step-3.7-flash:free` | step умрёт → 2 |
+| `code_visual_deep`, `logic_visual_deep` | `stepfun/step-3.7-flash:free` | step умрёт → 2 |
 
 Референсы деградируют мягко (turn не роняется): laguna-xs, solar-pro4, ling-3.0-flash-fin.
 
@@ -140,12 +140,21 @@ hermes -z "ping" --provider moa -m <preset> --cli   # прогнать затр�
 
 | Режим | Пресет | Панель | Агрегаторы |
 |---|---|---|---|
-| Free (дневной) | `free_auto_moa` (=`auto_moa`) | 5 free-пресетов | longcat / laguna-s / step |
+| Free (дневной) | `free_auto_moa` | 5 free-пресетов | longcat / laguna-s / step |
 | Pay (тяжёлые задачи) | `pay_auto_moa` | 5 pay-пресетов | glm-5.3-flash / deepseek-v4-flash / qwen3.8-flash |
 
 Переключение: `/model moa:pay_auto_moa` (или `free_auto_moa`) в Desktop/CLI; глобальный
 дефолт — free. В pay-панели платный ТОЛЬКО агрегатор (1 платный вызов за ход, референсы
 free), капы и reasoning-распределение те же.
+
+### Дедупликация пресетов (07.09.2026)
+
+12 пресетов вместо 13: legacy-имя `auto_moa` удалено везде (тот же граф, что у
+`free_auto_moa`; сессии мигрированы `auto_moa` → `free_auto_moa` с бэкапами
+`state.db.preset-dedup-20260907.bak`). Одинаковые слоты не копятся:
+`free_auto_moa` алиасит блоки `default`, `pay_auto_moa` — блоки `pay_default`
+(YAML anchors — парсер видит те же словари, валидация зелёная). Профили fantrax
+досинканы каноническим графом (там не хватало `auto_route`).
 
 ⚠️ **Pay-режим требует `paid_access`** (Plus-подписка ИЛИ купленные кредиты). Промо-кредиты
 Free-плана платный доступ не открывают; без него pay-пресеты **тихо** работают как free —

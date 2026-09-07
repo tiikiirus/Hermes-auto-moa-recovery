@@ -81,7 +81,7 @@ if not exist "!CONFIG_PATH!" goto :profile_config_missing
 set "PYTHON=%REPO%\venv\Scripts\python.exe"
 if not exist "!PYTHON!" set "PYTHON=python"
 
-"!PYTHON!" -c "import sys,yaml; from pathlib import Path; d=yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8')) or {}; r=((d.get('moa') or {}).get('presets') or {}).get('auto_moa') or {}; r=r.get('auto_route') or {}; q={'code':'code_logic_deep','logic':'logic_deep','code_visual':'code_visual_deep','logic_visual':'logic_visual_deep','fallback':'default'}; raise SystemExit(0 if all(r.get(k)==v for k,v in q.items()) else 1)" "!CONFIG_PATH!"
+"!PYTHON!" -c "import sys,yaml; from pathlib import Path; d=yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8')) or {}; r=((d.get('moa') or {}).get('presets') or {}).get('free_auto_moa') or {}; r=r.get('auto_route') or {}; q={'code':'code_logic_deep','logic':'logic_deep','code_visual':'code_visual_deep','logic_visual':'logic_visual_deep','fallback':'default'}; raise SystemExit(0 if all(r.get(k)==v for k,v in q.items()) else 1)" "!CONFIG_PATH!"
 if errorlevel 1 (
   echo [auto_moa] restoring MoA graph in profile %PROFILE%...
   copy /y "!CONFIG_PATH!" "!CONFIG_PATH!.before-auto-moa-restore.bak" >nul || goto :config_backup_failed
@@ -100,7 +100,7 @@ if errorlevel 1 (
 del /q "!CONFIG_CHECK_FILE!" >nul 2>&1
 set "MOA_LIST_FILE=%TEMP%\auto-moa-list-%RANDOM%.txt"
 hermes -p "%PROFILE%" moa list >"!MOA_LIST_FILE!" || goto :moa_list_failed
-findstr /i /c:"auto_moa" "!MOA_LIST_FILE!" >nul || goto :auto_moa_missing
+findstr /i /c:"free_auto_moa" "!MOA_LIST_FILE!" >nul || goto :free_auto_moa_missing
 del /q "!MOA_LIST_FILE!" >nul 2>&1
 
 :profile_verified
@@ -109,7 +109,7 @@ if "%QUICK%"=="1" goto :success
 set "PYTHON=%REPO%\venv\Scripts\python.exe"
 if not exist "!PYTHON!" set "PYTHON=python"
 echo [auto_moa] running focused Python tests...
-"!PYTHON!" -m pytest tests/agent/test_moa_auto_router.py tests/agent/test_moa_route_relay.py tests/hermes_cli/test_moa_config.py tests/hermes_cli/test_moa_auto_route.py -q || goto :python_tests_failed
+"!PYTHON!" -m pytest tests/agent/test_moa_auto_router.py tests/agent/test_moa_empty_reference.py tests/agent/test_moa_route_relay.py tests/hermes_cli/test_moa_config.py tests/hermes_cli/test_moa_auto_route.py -q || goto :python_tests_failed
 
 where npm >nul 2>&1 || goto :missing_npm
 echo [auto_moa] rebuilding and testing Ink TUI...
@@ -177,8 +177,8 @@ goto :fail
 :moa_list_failed
 echo [auto_moa] ERROR: hermes moa list failed.
 goto :fail
-:auto_moa_missing
-echo [auto_moa] ERROR: auto_moa is absent after config restore.
+:free_auto_moa_missing
+echo [auto_moa] ERROR: free_auto_moa is absent after config restore.
 goto :fail
 :python_tests_failed
 echo [auto_moa] ERROR: focused Python tests failed.

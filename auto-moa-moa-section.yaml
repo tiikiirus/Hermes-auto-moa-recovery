@@ -2,7 +2,7 @@ moa:
   presets:
     default:
       enabled: true
-      reference_models:
+      reference_models: &moa_default_refs
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: low
@@ -12,7 +12,7 @@ moa:
       - provider: nous
         model: poolside/laguna-s-2.1:free
         reasoning_effort: medium
-      aggregator:
+      aggregator: &moa_default_agg
         provider: nous
         model: meituan/longcat-2.0:free
         reasoning_effort: high
@@ -98,32 +98,6 @@ moa:
       reference_max_tokens: 600
       max_tokens: 4096
       fanout: user_turn
-    auto_moa:
-      auto_route:
-        code: code_logic_deep
-        logic: logic_deep
-        code_visual: code_visual_deep
-        logic_visual: logic_visual_deep
-        fallback: default
-        context_messages: 8
-      enabled: true
-      reference_models:
-      - provider: nous
-        model: poolside/laguna-xs-2.1:free
-        reasoning_effort: low
-      - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: low
-      - provider: nous
-        model: meituan/longcat-2.0:free
-        reasoning_effort: medium
-      aggregator:
-        provider: nous
-        model: stepfun/step-3.7-flash:free
-        reasoning_effort: high
-      reference_max_tokens: 600
-      max_tokens: 4096
-      fanout: user_turn
     free_auto_moa:
       auto_route:
         code: code_logic_deep
@@ -133,26 +107,14 @@ moa:
         fallback: default
         context_messages: 8
       enabled: true
-      reference_models:
-      - provider: nous
-        model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
-      - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: low
-      - provider: nous
-        model: poolside/laguna-s-2.1:free
-        reasoning_effort: medium
-      aggregator:
-        provider: nous
-        model: meituan/longcat-2.0:free
-        reasoning_effort: high
+      reference_models: *moa_default_refs
+      aggregator: *moa_default_agg
       reference_max_tokens: 600
       max_tokens: 4096
       fanout: user_turn
     pay_default:
       enabled: true
-      reference_models:
+      reference_models: &moa_pay_refs
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: low
@@ -162,7 +124,7 @@ moa:
       - provider: nous
         model: poolside/laguna-s-2.1:free
         reasoning_effort: medium
-      aggregator:
+      aggregator: &moa_pay_agg
         provider: nous
         model: z-ai/glm-5.3-flash
         reasoning_effort: high
@@ -255,20 +217,8 @@ moa:
         fallback: pay_default
         context_messages: 8
       enabled: true
-      reference_models:
-      - provider: nous
-        model: inclusionai/ling-3.0-flash-fin:free
-        reasoning_effort: low
-      - provider: nous
-        model: upstage/solar-pro4:free
-        reasoning_effort: low
-      - provider: nous
-        model: poolside/laguna-s-2.1:free
-        reasoning_effort: medium
-      aggregator:
-        provider: nous
-        model: z-ai/glm-5.3-flash
-        reasoning_effort: high
+      reference_models: *moa_pay_refs
+      aggregator: *moa_pay_agg
       reference_max_tokens: 600
       max_tokens: 4096
       fanout: user_turn
