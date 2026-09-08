@@ -24,19 +24,21 @@ echo Usage: %~nx0 [--check^|update^|repair]
 exit /b 1
 
 :check
-if not exist "%REPO%\agent\moa_auto_router.py" goto :check_failed
-git -C "%REPO%" apply --reverse --check "%PATCH%" >nul 2>&1
-if errorlevel 1 goto :check_failed
 set "SYNC=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\tools\moa_sync.py"
 if not exist "%SYNC%" goto :check_failed
 where python >nul 2>&1 || goto :check_failed
 python "%SYNC%" --check >nul 2>&1
 if errorlevel 1 goto :check_failed
-echo [auto-moa] HEALTHY
+if exist "%REPO%\agent\moa_auto_router.py" goto :check_router_ok
+echo [auto-moa] HEALTHY-NATIVE (Hermes ^>= 0.21.1 native MoA presets; custom auto-router not ported yet - category routing off)
+exit /b 0
+
+:check_router_ok
+echo [auto-moa] HEALTHY (custom auto-router active)
 exit /b 0
 
 :check_failed
-echo [auto-moa] MISSING, DIVERGED, or CONFIG DRIFTED
+echo [auto-moa] CONFIG DRIFTED or sync tool missing
 exit /b 1
 
 :repair
