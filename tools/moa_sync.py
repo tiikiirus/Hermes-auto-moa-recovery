@@ -155,7 +155,11 @@ def catalog_models() -> set[str] | None:
                 out.extend(find_tokens(val))
         return out
 
-    for token in find_tokens(auth):
+    # Security: send ONLY the nous token to Nous endpoints. find_tokens would
+    # sweep every provider's token strings (incl. refresh tokens) from
+    # auth.json into the Authorization header — a pointless third-party leak.
+    nous_token = ((auth.get("providers") or {}).get("nous") or {}).get("access_token")
+    for token in ([nous_token] if nous_token else []):
         try:
             req = urllib.request.Request(
                 "https://inference-api.nousresearch.com/v1/models",
