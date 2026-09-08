@@ -73,23 +73,32 @@ hermes-update --repair
 ```
 hermes update (reset --hard origin/main)
         ↓
-auto-MoA исчезает (коммиты затираются)
+Live-дерево → чистый upstream. С v0.21.1 в нём ЕСТЬ нативный MoA
+(пресеты, валидация, fanout, privacy_filter), но НЕТ auto-роутера
         ↓
-hermes-update.bat автоматически накатывает патч из recovery-проекта
+auto-moa-current.patch накатывает только наш роутер поверх native
+(3-way merge; при конфликте — восстановление файлов из чистого HEAD
+через `git show`, затем повторная интеграция)
         ↓
 auto-MoA восстановлен
 ```
 
-Патч хранится **вне `.git`** — в recovery-проекте, поэтому не затирается при `reset --hard`.
+Гейт `hermes-update.bat --check` различает два режима:
+- `[auto-moa] HEALTHY (custom auto-router active)` — роутер на месте;
+- `[auto-moa] HEALTHY-NATIVE` — чистый v0.21.1+: пресеты работают (явный выбор
+  `/model moa:<preset>` и дефолты профилей), но категорийной маршрутизации нет.
+
+База порта: hermes-agent `9fd44b4` (v0.21.1). Патч хранится **вне `.git`** — в
+recovery-проекте, поэтому не затирается при `reset --hard`.
 
 ## Файлы
 
 | Файл | Назначение |
 |---|---|
-| `auto-moa-current.patch` | Чистый патч против `origin/main` hermes-agent (накатывается на свежий `hermes update`; синхронизирован с hermes-agent `89d076a`). |
+| `auto-moa-current.patch` | Патч роутера поверх нативного MoA (база hermes-agent `9fd44b4` = v0.21.1; только добавка `agent/moa_auto_router.py` + хуки в `moa_loop`/`moa_config`/`moa_cmd`/`moa_trace`). |
 | `auto-moa-hook.sh` | post-merge git hook для ручного `git pull` (не срабатывает при `hermes update`, т.к. тот использует `reset --hard`). |
 | `auto-moa-watchdog.bat` | Скрипт починки: пере-накатывает патч если `auto_moa_router.py` отсутствует или рассинхрон. |
-| `hermes-update.bat` | Обёртка `hermes update` с авто-починкой (`--check`/`--repair`/`update`). |
+| `hermes-update.bat` | Обёртка `hermes update` с авто-починкой (`--check` → HEALTHY / HEALTHY-NATIVE; `--repair`). |
 | `install-auto-moa.bat` | Установщик: патч + hook + watchdog + cronjob. |
 | `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
 | `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
