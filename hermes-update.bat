@@ -39,6 +39,8 @@ exit /b 0
 :check_router_ok
 git -C "%REPO%" apply --reverse --check "%PATCH%" >nul 2>&1
 if errorlevel 1 echo [auto-moa] WARNING: source drift outside patch hunks (router present, patch does not reverse-apply cleanly)
+python "%RECOVERY%\tools\live_tree_check.py" --check >nul 2>&1
+if errorlevel 1 echo [auto-moa] WARNING: live tree has non-patch modifications (run tools\live_tree_check.py --fix to review)
 echo [auto-moa] HEALTHY (custom auto-router active)
 exit /b 0
 

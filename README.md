@@ -106,6 +106,8 @@ recovery-проекте, поэтому не затирается при `reset 
 | `check-moa-models.py` / `.bat` | Мониторинг живости моделей схемы (free+pay тиры, без API-ключа) + статус гейта `paid_access` + новые free-модели каталога. |
 | `rotate-moa-model.py` / `.bat` | Ротация выпавшей модели во всех конфигах: `rotate-moa-model.bat <dead> <replacement>`. |
 | `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |
+| `tools/live_tree_check.py` | Гейт чистоты live-дерева: вне 9 файлов патча грязи быть не должно (`--check` только отчёт; `--fix` откатывает ТРЕКНУТЫЙ шум через `git checkout`, untracked только показывает, не удаляет). |
+| `run-moa-tests.bat` | Focused MoA-pytest со свежим `--basetemp` на прогон (обход WinError 5 в shared pytest-temp; чужой `pytest-of-tiki` не трогает). |
 | `USER_GUIDE_RU.txt` | Подробная русская инструкция. |
 
 ## Схема MoA и ротация моделей (актуально с 01.09.2026)
