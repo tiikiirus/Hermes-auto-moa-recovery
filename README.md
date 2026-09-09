@@ -95,7 +95,7 @@ recovery-проекте, поэтому не затирается при `reset 
 
 | Файл | Назначение |
 |---|---|
-| `auto-moa-current.patch` | Патч роутера поверх нативного MoA (база hermes-agent `9fd44b4` = v0.21.1; только добавка `agent/moa_auto_router.py` + хуки в `moa_loop`/`moa_config`/`moa_cmd`/`moa_trace`). |
+| `auto-moa-current.patch` | Патч роутера поверх нативного MoA (база hermes-agent `9fd44b4` = v0.21.1; хуки в `moa_loop`/`moa_config`/`moa_cmd`/`moa_trace` + новый `agent/moa_auto_router.py` + тесты; включает кап `reference_max_tokens` на loop-пути). |
 | `auto-moa-hook.sh` | post-merge git hook для ручного `git pull` (не срабатывает при `hermes update`, т.к. тот использует `reset --hard`). |
 | `auto-moa-watchdog.bat` | Скрипт починки: пере-накатывает патч если `auto_moa_router.py` отсутствует или рассинхрон. |
 | `hermes-update.bat` | Обёртка `hermes update` с авто-починкой (`--check` → HEALTHY / HEALTHY-NATIVE; `--repair`). |
@@ -172,11 +172,15 @@ CLI не печатает ни ошибки, ни warning (проверено id
 
 ### reasoning_effort: почему разные уровни
 
-- **Advisors — low/medium**: их совет обрезается `reference_max_tokens: 600` — reasoning
+- **Advisors — low/medium**: их совет обрезается `reference_max_tokens: 2048` — reasoning
   сверх этого бюджета физически не доезжает до агрегатора; wall time хода = самый медленный
   advisor (docs), поэтому max у всех советников = все ждут самого глубокого (было 86s).
 - **Агрегатор — high**: пишет финальный ответ и tool-calls. `max` не держим сознательно —
   при деградации качества поднять до `xhigh`/`max` у конкретного пресета.
+
+Кап `reference_max_tokens` реально применяется на loop-пути (`_run_fanout` пробрасывает
+его в `max_tokens` advisor-вызовов; `moa_config` сохраняет ключ при нормализации) —
+до фикса ключ молча терялся, советники работали без капа (замер: 101k символов от одного).
 
 ### Адекватность reasoning сложности хода (с коммита `cda3c3860`)
 

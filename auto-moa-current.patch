@@ -1,5 +1,226 @@
+diff --git a/agent/moa_auto_router.py b/agent/moa_auto_router.py
+new file mode 100644
+index 000000000..428bf86bc
+--- /dev/null
++++ b/agent/moa_auto_router.py
+@@ -0,0 +1,214 @@
++"""Deterministic, pre-inference routing for opt-in MoA auto presets."""
++
++from __future__ import annotations
++
++import hashlib
++import re
++from dataclasses import dataclass
++from typing import Any, Mapping, Sequence
++
++from agent.message_content import flatten_message_text
++
++
++_CODE_RE = re.compile(
++    r"(?ix)(?:"
++    r"\b(?:api|css|html|javascript|pytest|typescript|ui)\b|"
++    r"\b(?:bug|cod|compil|debug|exception|function|implement|refactor|regression|repositor|test)\w*|"
++    r"\bstack\s*trace\b|"
++    r"\b(?:баг|верст|интерфейс|исправ|код|компил|отлад|ошибк|падени|реализ|рефактор|репозитор|тест)\w*"
++    r")"
++)
++
++_SOURCE_FILE_RE = re.compile(
++    r"(?ix)\.(?:"
++    r"bash|c|cc|cpp|cs|css|go|graphql|h|hcl|hpp|html|java|js|json|jsx|kt|kts|"
++    r"less|php|proto|py|rb|rs|sass|scala|scss|sh|sql|svelte|swift|tf|toml|ts|tsx|"
++    r"vue|xml|ya?ml"
++    r")(?:\b|$)"
++)
++
++_CODE_FENCE_RE = re.compile(
++    r"(?i)```(?:bash|c|cpp|csharp|css|go|html|java|javascript|js|json|jsx|php|"
++    r"python|py|ruby|rust|sh|sql|swift|tsx?|typescript|vue|xml|ya?ml)\b"
++)
++
++_LOGIC_RE = re.compile(
++    r"(?ix)\b(?:"
++    r"analyse|analyze|architecture|compare|contradiction|deduce|evaluate|"
++    r"hypothesis|logic|plan|proof|reason|strategy|trade[- ]?off|"
++    r"анализ|архитектур|вывод|гипотез|доказ|логик|обосну|план|"
++    r"противореч|сравн|стратег"
++    r")\w*"
++)
++
++_FOLLOW_UP_RE = re.compile(
++    r"(?ix)^\s*(?:"
++    r"continue|proceed|go\s+on|keep\s+going|carry\s+on|do\s+(?:it|that)|"
++    r"same(?:\s+thing)?|again|"
++    r"продолж\w*|дальше|доработ\w*|сделай\s+это|так\s+же|ещ[её]"
++    r")\b"
++)
++
++_VISUAL_PART_TYPES = {
++    "image",
++    "image_url",
++    "input_image",
++    "input_video",
++    "video",
++    "video_url",
++}
++
++
++@dataclass(frozen=True)
++class MoARouteDecision:
++    """Resolved semantic category and concrete MoA preset."""
++
++    category: str
++    preset: str
++    reason: str
++
++
++def _text_content(content: Any) -> str:
++    return flatten_message_text(content)
++
++
++def _has_visual_content(content: Any) -> bool:
++    if isinstance(content, Mapping):
++        return str(content.get("type") or "").lower() in _VISUAL_PART_TYPES
++    if not isinstance(content, (list, tuple)):
++        return False
++    return any(
++        isinstance(item, Mapping)
++        and str(item.get("type") or "").lower() in _VISUAL_PART_TYPES
++        for item in content
++    )
++
++
++def auto_route_turn_fingerprint(messages: Sequence[Mapping[str, Any]]) -> str:
++    """Best-effort stable identity for direct callers without a canonical turn ID."""
++    user_messages = [message for message in messages if message.get("role") == "user"]
++    latest = user_messages[-1] if user_messages else {}
++    content = latest.get("content")
++    visual_parts: list[dict[str, Any]] = []
++    content_parts = (
++        [content]
++        if isinstance(content, Mapping)
++        else content
++        if isinstance(content, (list, tuple))
++        else []
++    )
++    if content_parts:
++        for part in content_parts:
++            if not isinstance(part, Mapping):
++                continue
++            if str(part.get("type") or "").lower() not in _VISUAL_PART_TYPES:
++                continue
++            visual_parts.append(
++                {key: value for key, value in part.items() if key != "cache_control"}
++            )
++    semantic_turn = (
++        len(user_messages),
++        flatten_message_text(content),
++        visual_parts,
++    )
++    return hashlib.sha256(repr(semantic_turn).encode("utf-8", "replace")).hexdigest()
++
++
++def _routed_category(base: str, has_visual: bool) -> str:
++    semantic_base = "code" if base.startswith("code") else "logic"
++    if not has_visual:
++        return semantic_base
++    return f"{semantic_base}_visual"
++
++
++def _has_code_signals(text: str) -> bool:
++    return bool(
++        _CODE_RE.search(text)
++        or _SOURCE_FILE_RE.search(text)
++        or _CODE_FENCE_RE.search(text)
++    )
++
++
++def select_auto_moa_route(
++    messages: Sequence[Mapping[str, Any]],
++    routes: Mapping[str, Any],
++    *,
++    previous_category: str | None = None,
++) -> MoARouteDecision:
++    """Choose a concrete preset before any model call is made."""
++
++    latest_user_index = next(
++        (
++            index
++            for index in range(len(messages) - 1, -1, -1)
++            if messages[index].get("role") == "user"
++        ),
++        -1,
++    )
++    latest_user = messages[latest_user_index] if latest_user_index >= 0 else {}
++    try:
++        context_limit = max(1, min(20, int(routes.get("context_messages", 8))))
++    except (TypeError, ValueError):
++        context_limit = 8
++    context_messages = [
++        message
++        for message in messages[:latest_user_index]
++        if message.get("role") in {"user", "assistant"}
++    ][-context_limit:]
++    text = _text_content(latest_user.get("content"))
++    is_contextual_follow_up = bool(_FOLLOW_UP_RE.search(text))
++    context_text = "\n".join(
++        _text_content(message.get("content")) for message in context_messages
++    )
++    latest_has_visual = _has_visual_content(latest_user.get("content"))
++    context_has_visual = any(
++        message.get("role") == "user"
++        and _has_visual_content(message.get("content"))
++        for message in context_messages
++    )
++    has_visual = latest_has_visual or (
++        is_contextual_follow_up and context_has_visual
++    )
++    if _has_code_signals(text):
++        category = _routed_category("code", has_visual)
++        reason = "visual-context+code-signals" if has_visual else "code-signals"
++        return MoARouteDecision(category, str(routes[category]), reason)
++    if _LOGIC_RE.search(text):
++        category = _routed_category("logic", has_visual)
++        reason = "visual-context+logic-signals" if has_visual else "logic-signals"
++        return MoARouteDecision(category, str(routes[category]), reason)
++    if is_contextual_follow_up and previous_category in {
++        "code",
++        "logic",
++        "code_visual",
++        "logic_visual",
++    }:
++        category = _routed_category(previous_category, has_visual)
++        return MoARouteDecision(
++            category,
++            str(routes[category]),
++            f"sticky-{category}",
++        )
++    if is_contextual_follow_up and _has_code_signals(context_text):
++        category = _routed_category("code", has_visual)
++        reason = (
++            "visual-context+context-code-signals"
++            if has_visual
++            else "context-code-signals"
++        )
++        return MoARouteDecision(category, str(routes[category]), reason)
++    if is_contextual_follow_up and _LOGIC_RE.search(context_text):
++        category = _routed_category("logic", has_visual)
++        reason = (
++            "visual-context+context-logic-signals"
++            if has_visual
++            else "context-logic-signals"
++        )
++        return MoARouteDecision(category, str(routes[category]), reason)
++    if has_visual:
++        return MoARouteDecision(
++            "logic_visual",
++            str(routes["logic_visual"]),
++            "visual-context",
++        )
++    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
+\ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index ce2e2bd5c..4d1126025 100644
+index ce2e2bd5c..5eda62a6c 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
 @@ -119,6 +119,82 @@ _preset_cache_lock = threading.Lock()
@@ -129,7 +350,31 @@ index ce2e2bd5c..4d1126025 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1216,9 +1302,12 @@ class MoAChatCompletions:
+@@ -1191,12 +1277,21 @@ class MoAChatCompletions:
+     ) -> list[tuple[str, str, Any]]:
+         """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
+ 
+-        A preset MAY cap ADVISOR output (dominant MoA latency); the acting aggregator
+-        is never capped. None timeout = inherit auxiliary.moa_reference.timeout.
++        A preset MAY cap ADVISOR output via ``reference_max_tokens`` (dominant MoA
++        latency/noise); the acting aggregator is never capped.
++        None timeout = inherit auxiliary.moa_reference.timeout.
+         """
+         raw_reference_timeout = preset.get("reference_timeout")
++        raw_reference_max_tokens = preset.get("reference_max_tokens")
++        try:
++            reference_max_tokens = int(raw_reference_max_tokens) if raw_reference_max_tokens else None
++            if reference_max_tokens is not None and reference_max_tokens <= 0:
++                reference_max_tokens = None
++        except (TypeError, ValueError):
++            reference_max_tokens = None
+         reference_outputs = _run_references_parallel(
+             reference_models, ref_messages, temperature=_preset_temperature(preset, "reference_temperature"),
++            max_tokens=reference_max_tokens,
+ 
+             progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
+             reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
+@@ -1216,9 +1311,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -143,7 +388,7 @@ index ce2e2bd5c..4d1126025 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1289,6 +1378,111 @@ class MoAChatCompletions:
+@@ -1289,6 +1387,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -255,7 +500,7 @@ index ce2e2bd5c..4d1126025 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1320,6 +1514,12 @@ class MoAChatCompletions:
+@@ -1320,6 +1523,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -268,7 +513,7 @@ index ce2e2bd5c..4d1126025 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1355,6 +1555,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1355,6 +1564,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -339,7 +584,7 @@ index eb2939f62..9359166bc 100644
      if moa["default_preset"] == preset_name:
          moa["default_preset"] = next(iter(moa["presets"]))
 diff --git a/hermes_cli/moa_config.py b/hermes_cli/moa_config.py
-index 0c0c52892..b36f1210b 100644
+index 0c0c52892..ccedf1cc0 100644
 --- a/hermes_cli/moa_config.py
 +++ b/hermes_cli/moa_config.py
 @@ -11,6 +11,30 @@ from typing import Any
@@ -383,7 +628,15 @@ index 0c0c52892..b36f1210b 100644
          "enabled": _coerce_bool(raw.get("enabled"), True),
          "reference_models": refs or _default_reference_models(),
          "aggregator": _clean_slot(raw.get("aggregator")) or deepcopy(DEFAULT_MOA_AGGREGATOR),
-@@ -230,6 +255,9 @@ def _normalize_preset(raw: Any) -> dict[str, Any]:
+@@ -224,17 +249,22 @@ def _normalize_preset(raw: Any) -> dict[str, Any]:
+         "reference_temperature": _coerce_number(raw.get("reference_temperature"), float),
+         "aggregator_temperature": _coerce_number(raw.get("aggregator_temperature"), float),
+         "reference_timeout": _coerce_reference_timeout(raw.get("reference_timeout")),
++        # Advisor output cap (dominant MoA latency/noise); None = provider default (uncapped).
++        "reference_max_tokens": _coerce_number(raw.get("reference_max_tokens"), int, None, positive=True),
+         # Failed-advisor disclosure policy; unknown values fail loud.
+         "degraded_reference_policy": policy if policy in {"loud", "silent"} else "loud",
+ 
          # "user_turn" (default, cheapest): advisors run ONCE per user turn; "per_iteration": every
          # tool iteration; "every_n:<N>": first iteration of each turn and every Nth after.
          "fanout": _coerce_fanout(raw.get("fanout"))}
@@ -393,3 +646,997 @@ index 0c0c52892..b36f1210b 100644
  
  
  _FLAT_PRESET_KEYS = (
+     "reference_models", "aggregator", "reference_temperature", "aggregator_temperature",
+-    "reference_timeout", "degraded_reference_policy",
++    "reference_timeout", "reference_max_tokens", "degraded_reference_policy",
+     "fanout", "enabled")
+ 
+ 
+diff --git a/tests/agent/test_moa_auto_router.py b/tests/agent/test_moa_auto_router.py
+new file mode 100644
+index 000000000..023369cc4
+--- /dev/null
++++ b/tests/agent/test_moa_auto_router.py
+@@ -0,0 +1,235 @@
++from agent.moa_auto_router import select_auto_moa_route
++
++
++ROUTES = {
++    "code": "code_logic_deep",
++    "logic": "logic_deep",
++    "code_visual": "code_visual_deep",
++    "logic_visual": "logic_visual_deep",
++    "fallback": "default",
++}
++
++
++def test_code_task_routes_to_code_preset():
++    decision = select_auto_moa_route(
++        [{"role": "user", "content": "Исправь падение pytest и добавь regression test"}],
++        ROUTES,
++    )
++
++    assert decision.category == "code"
++    assert decision.preset == "code_logic_deep"
++    assert decision.reason == "code-signals"
++
++
++def test_reasoning_task_routes_to_logic_preset():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": "Сравни архитектурные варианты, найди противоречия и обоснуй вывод",
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.category == "logic"
++    assert decision.preset == "logic_deep"
++    assert decision.reason == "logic-signals"
++
++
++def test_visual_code_task_routes_to_code_visual_preset():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Сверстай этот UI и исправь CSS"},
++                    {
++                        "type": "image_url",
++                        "image_url": {"url": "data:image/png;base64,AA=="},
++                    },
++                ],
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.category == "code_visual"
++    assert decision.preset == "code_visual_deep"
++    assert decision.reason == "visual-context+code-signals"
++
++
++def test_generic_visual_task_routes_to_logic_visual_preset():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Что здесь происходит?"},
++                    {"type": "input_image", "image_url": "file:///diagram.png"},
++                ],
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.category == "logic_visual"
++    assert decision.preset == "logic_visual_deep"
++    assert decision.reason == "visual-context"
++
++
++def test_ambiguous_follow_up_keeps_previous_code_category():
++    decision = select_auto_moa_route(
++        [{"role": "user", "content": "Продолжай и сделай аккуратно"}],
++        ROUTES,
++        previous_category="code",
++    )
++
++    assert decision.category == "code"
++    assert decision.preset == "code_logic_deep"
++    assert decision.reason == "sticky-code"
++
++
++def test_ambiguous_first_turn_uses_recent_conversation_context():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "system",
++                "content": "You are a coding agent. Always mention pytest.",
++            },
++            {"role": "user", "content": "Найди баг в Python parser"},
++            {"role": "assistant", "content": "Причина найдена."},
++            {"role": "user", "content": "Продолжай и сделай аккуратно"},
++        ],
++        ROUTES,
++    )
++
++    assert decision.category == "code"
++    assert decision.preset == "code_logic_deep"
++    assert decision.reason == "context-code-signals"
++
++
++def test_russian_inflected_code_terms_route_to_code_preset():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": "Проанализируй архитектуру репозитория, исправь ошибку в реализации и добавь тесты.",
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.preset == "code_logic_deep"
++    assert decision.category == "code"
++
++
++def test_source_file_path_routes_to_code_preset():
++    decision = select_auto_moa_route(
++        [{"role": "user", "content": "Проверь src/components/Button.tsx около строки 42"}],
++        ROUTES,
++    )
++
++    assert decision.preset == "code_logic_deep"
++    assert decision.category == "code"
++
++
++def test_fenced_source_routes_to_code_preset():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": "Что здесь не так?\n```python\nvalue = items[0]\n```",
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.preset == "code_logic_deep"
++    assert decision.category == "code"
++
++
++def test_visual_stickiness_downgrades_after_visual_context_expires():
++    decision = select_auto_moa_route(
++        [{"role": "user", "content": "Продолжай аккуратно"}],
++        ROUTES,
++        previous_category="code_visual",
++    )
++
++    assert decision.preset == "code_logic_deep"
++    assert decision.category == "code"
++
++
++def test_previous_category_does_not_hijack_a_new_self_contained_task():
++    decision = select_auto_moa_route(
++        [
++            {"role": "user", "content": "Исправь parser.py"},
++            {"role": "assistant", "content": "Готово."},
++            {"role": "user", "content": "Напиши короткое дружелюбное приветствие"},
++        ],
++        ROUTES,
++        previous_category="code",
++    )
++
++    assert decision.preset == "default"
++    assert decision.category == "fallback"
++
++
++def test_input_text_part_participates_in_visual_code_routing():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "input_text", "text": "Исправь CSS этого UI"},
++                    {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
++                ],
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.preset == "code_visual_deep"
++    assert decision.category == "code_visual"
++
++
++def test_single_visual_content_part_uses_visual_route():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": {
++                    "type": "input_image",
++                    "image_url": "data:image/png;base64,AA==",
++                },
++            }
++        ],
++        ROUTES,
++    )
++
++    assert decision.preset == "logic_visual_deep"
++    assert decision.category == "logic_visual"
++
++
++def test_unrelated_turn_after_visual_context_falls_back_to_default():
++    decision = select_auto_moa_route(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Исправь CSS этого UI"},
++                    {
++                        "type": "image_url",
++                        "image_url": {"url": "data:image/png;base64,AA=="},
++                    },
++                ],
++            },
++            {"role": "assistant", "content": "Готово."},
++            {"role": "user", "content": "Напиши короткое дружелюбное приветствие"},
++        ],
++        ROUTES,
++        previous_category="code_visual",
++    )
++
++    assert decision.preset == "default"
++    assert decision.category == "fallback"
+\ No newline at end of file
+diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
+new file mode 100644
+index 000000000..925616928
+--- /dev/null
++++ b/tests/agent/test_moa_auto_runtime.py
+@@ -0,0 +1,659 @@
++from __future__ import annotations
++
++import json
++from types import SimpleNamespace
++
++import yaml
++
++
++def _response(content: str):
++    message = SimpleNamespace(content=content, tool_calls=[])
++    choice = SimpleNamespace(message=message, finish_reason="stop")
++    return SimpleNamespace(choices=[choice], usage=None, model="fake")
++
++
++def _write_auto_config(home):
++    home.mkdir()
++    (home / "config.yaml").write_text(
++        """
++moa:
++  default_preset: default
++  presets:
++    auto_moa:
++      auto_route:
++        code: code_logic_deep
++        logic: logic_deep
++        code_visual: code_visual_deep
++        logic_visual: logic_visual_deep
++        fallback: default
++        context_messages: 8
++      reference_models:
++        - provider: test
++          model: placeholder-ref
++      aggregator:
++        provider: test
++        model: placeholder-agg
++    default:
++      reference_models:
++        - provider: test
++          model: default-ref
++      aggregator:
++        provider: test
++        model: default-agg
++    code_logic_deep:
++      reference_models:
++        - provider: test
++          model: code-ref
++      aggregator:
++        provider: test
++        model: code-agg
++    logic_deep:
++      reference_models:
++        - provider: test
++          model: logic-ref
++      aggregator:
++        provider: test
++        model: logic-agg
++    code_visual_deep:
++      reference_models:
++        - provider: test
++          model: code-visual-ref
++      aggregator:
++        provider: test
++        model: code-visual-agg
++    logic_visual_deep:
++      reference_models:
++        - provider: test
++          model: logic-visual-ref
++      aggregator:
++        provider: test
++        model: logic-visual-agg
++""".strip(),
++        encoding="utf-8",
++    )
++
++
++def test_auto_preset_executes_selected_code_preset(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++
++    def fake_call_llm(**kwargs):
++        calls.append((kwargs["task"], kwargs["model"]))
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    events = []
++    facade = MoAChatCompletions(
++        "auto_moa",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    facade.create(
++        model="auto_moa",
++        messages=[{"role": "user", "content": "Исправь pytest regression в parser"}],
++    )
++
++    assert calls == [("moa_reference", "code-ref"), ("moa_aggregator", "code-agg")]
++    assert facade.last_aggregator_slot["model"] == "code-agg"
++    assert facade.last_resolved_preset_name == "code_logic_deep"
++    assert facade.last_auto_route_decision.reason == "code-signals"
++    assert ("moa.route", {"preset": "code_logic_deep", "reason": "code-signals"}) in events
++
++
++def test_auto_route_event_reaches_agent_progress_callback(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    def fake_call_llm(**kwargs):
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import build_moa_facade
++
++    progress = []
++    agent = SimpleNamespace(
++        model="auto_moa",
++        tool_progress_callback=lambda *args, **kwargs: progress.append((args, kwargs)),
++    )
++    client = build_moa_facade(agent, "auto_moa")
++    client.chat.completions.create(
++        model="auto_moa",
++        messages=[{"role": "user", "content": "Исправь pytest regression"}],
++    )
++
++    route_events = [event for event in progress if event[0][0] == "moa.route"]
++    assert len(route_events) == 1
++    args, kwargs = route_events[0]
++    assert args[1] == "code_logic_deep"
++    assert args[2] == "code-signals"
++    assert kwargs["moa_preset"] == "code_logic_deep"
++    assert kwargs["moa_reason"] == "code-signals"
++
++
++def test_auto_route_is_decided_once_across_tool_iterations(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++
++    def fake_call_llm(**kwargs):
++        calls.append((kwargs["task"], kwargs["model"]))
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    events = []
++    facade = MoAChatCompletions(
++        "auto_moa",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    user_message = {"role": "user", "content": "Исправь pytest regression"}
++    facade.create(model="auto_moa", messages=[user_message])
++    facade.create(
++        model="auto_moa",
++        messages=[
++            user_message,
++            {"role": "assistant", "content": "Проверяю файл."},
++            {"role": "tool", "tool_call_id": "call-1", "content": "tool output"},
++        ],
++    )
++
++    assert [kwargs for event, kwargs in events if event == "moa.route"] == [
++        {"preset": "code_logic_deep", "reason": "code-signals"}
++    ]
++    assert calls == [
++        ("moa_reference", "code-ref"),
++        ("moa_aggregator", "code-agg"),
++        ("moa_aggregator", "code-agg"),
++    ]
++
++
++def test_auto_route_can_switch_on_a_new_user_turn(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++
++    def fake_call_llm(**kwargs):
++        calls.append((kwargs["task"], kwargs["model"]))
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    events = []
++    facade = MoAChatCompletions(
++        "auto_moa",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    first_turn = {"role": "user", "content": "Исправь pytest regression"}
++    facade.create(model="auto_moa", messages=[first_turn])
++    facade.create(
++        model="auto_moa",
++        messages=[
++            first_turn,
++            {"role": "assistant", "content": "Исправление готово."},
++            {
++                "role": "user",
++                "content": "Теперь сравни стратегии принятия решений и обоснуй вывод",
++            },
++        ],
++    )
++
++    route_presets = [kwargs["preset"] for event, kwargs in events if event == "moa.route"]
++    assert route_presets == ["code_logic_deep", "logic_deep"]
++    assert calls[-2:] == [
++        ("moa_reference", "logic-ref"),
++        ("moa_aggregator", "logic-agg"),
++    ]
++
++
++def test_visual_auto_route_keeps_pixels_for_aggregator_only(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++
++    def fake_call_llm(**kwargs):
++        calls.append(kwargs)
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    facade = MoAChatCompletions("auto_moa")
++    facade.create(
++        model="auto_moa",
++        messages=[
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Что изображено?"},
++                    {
++                        "type": "image_url",
++                        "image_url": {"url": "data:image/png;base64,AA=="},
++                    },
++                ],
++            }
++        ],
++    )
++
++    reference_call, aggregator_call = calls
++    assert reference_call["model"] == "logic-visual-ref"
++    assert "image_url" not in repr(reference_call["messages"])
++    assert aggregator_call["model"] == "logic-visual-agg"
++    assert "image_url" in repr(aggregator_call["messages"])
++    assert facade.last_resolved_preset_name == "logic_visual_deep"
++
++
++def test_auto_route_trace_records_requested_target_category_and_reason(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    config_path = home / "config.yaml"
++    config_path.write_text(
++        config_path.read_text(encoding="utf-8").replace(
++            "moa:\n",
++            "moa:\n  save_traces: true\n",
++            1,
++        ),
++        encoding="utf-8",
++    )
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    def fake_call_llm(**kwargs):
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    facade = MoAChatCompletions("auto_moa")
++    facade.create(
++        model="auto_moa",
++        messages=[{"role": "user", "content": "Исправь pytest regression"}],
++    )
++    facade.consume_and_save_trace("route-session", "acted")
++
++    trace_path = home / "moa-traces" / "route-session.jsonl"
++    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
++    assert record["routing"] == {
++        "requested_preset": "auto_moa",
++        "resolved_preset": "code_logic_deep",
++        "category": "code",
++        "reason": "code-signals",
++    }
++
++
++def test_explicit_turn_id_prevents_reroute_after_transcript_rebase(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    def fake_call_llm(**kwargs):
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    events = []
++    facade = MoAChatCompletions(
++        "auto_moa",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    facade.prepare(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Исправь CSS этого UI"},
++                    {
++                        "type": "image_url",
++                        "image_url": {"url": "data:image/png;base64,AA=="},
++                    },
++                ],
++            }
++        ],
++        turn_id="stable-turn",
++    )
++    facade.prepare(
++        [{"role": "user", "content": "Продолжай"}],
++        turn_id="stable-turn",
++    )
++
++    routes = [kwargs for event, kwargs in events if event == "moa.route"]
++    assert routes == [
++        {
++            "preset": "code_visual_deep",
++            "reason": "visual-context+code-signals",
++        }
++    ]
++    assert facade.last_resolved_preset_name == "code_visual_deep"
++
++
++def test_malformed_auto_route_fails_loud_instead_of_running_anchor(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    config_path = home / "config.yaml"
++    config_path.write_text(
++        config_path.read_text(encoding="utf-8").replace(
++            "        code: code_logic_deep\n",
++            "",
++            1,
++        ),
++        encoding="utf-8",
++    )
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++    monkeypatch.setattr(
++        "agent.moa_loop.call_llm",
++        lambda **kwargs: calls.append(kwargs) or _response("unexpected"),
++    )
++
++    import pytest
++
++    from agent.moa_loop import MoAChatCompletions
++
++    with pytest.raises(RuntimeError, match="invalid auto_route"):
++        MoAChatCompletions("auto_moa").create(
++            model="auto_moa",
++            messages=[{"role": "user", "content": "Исправь parser.py"}],
++        )
++
++    assert calls == []
++
++
++def _write_capped_config(home):
++    home.mkdir()
++    (home / "config.yaml").write_text(
++        """
++moa:
++  default_preset: default
++  presets:
++    default:
++      reference_max_tokens: 2048
++      reference_models:
++        - provider: test
++          model: capped-ref
++      aggregator:
++        provider: test
++        model: capped-agg
++""".strip(),
++        encoding="utf-8",
++    )
++
++
++def test_reference_max_tokens_reaches_advisors_on_loop_path(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_capped_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    seen = {}
++
++    def fake_call_llm(**kwargs):
++        if kwargs["task"] == "moa_reference":
++            seen["max_tokens"] = kwargs.get("max_tokens")
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    MoAChatCompletions("default").create(
++        model="default",
++        messages=[{"role": "user", "content": "обычный вопрос"}],
++    )
++
++    assert seen.get("max_tokens") == 2048
++
++
++def test_reference_max_tokens_absent_means_uncapped(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    seen = {}
++
++    def fake_call_llm(**kwargs):
++        if kwargs["task"] == "moa_reference":
++            seen["max_tokens"] = kwargs.get("max_tokens")
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    MoAChatCompletions("default").create(
++        model="default",
++        messages=[{"role": "user", "content": "обычный вопрос"}],
++    )
++
++    assert seen.get("max_tokens") is None
++
++
++def test_reference_max_tokens_invalid_coerces_to_uncapped():
++    from hermes_cli.moa_config import normalize_moa_config
++
++    cfg = normalize_moa_config(
++        {
++            "presets": {
++                "default": {
++                    "reference_max_tokens": "мусор",
++                    "reference_models": [{"provider": "t", "model": "m"}],
++                    "aggregator": {"provider": "t", "model": "a"},
++                },
++                "zero": {
++                    "reference_max_tokens": 0,
++                    "reference_models": [{"provider": "t", "model": "m"}],
++                    "aggregator": {"provider": "t", "model": "a"},
++                },
++            }
++        }
++    )
++
++    assert cfg["presets"]["default"]["reference_max_tokens"] is None
++    assert cfg["presets"]["zero"]["reference_max_tokens"] is None
++
++
++def test_different_turn_ids_route_identical_prompts_independently(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    monkeypatch.setattr(
++        "agent.moa_loop.call_llm",
++        lambda **kwargs: _response(
++            "advice" if kwargs["task"] == "moa_reference" else "acted"
++        ),
++    )
++
++    from agent.moa_loop import MoAChatCompletions
++
++    events = []
++    facade = MoAChatCompletions(
++        "auto_moa",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    messages = [{"role": "user", "content": "Исправь parser.py"}]
++    facade.prepare(messages, turn_id="turn-1")
++    facade.prepare(messages, turn_id="turn-2")
++
++    routes = [kwargs for event, kwargs in events if event == "moa.route"]
++    assert routes == [
++        {"preset": "code_logic_deep", "reason": "code-signals"},
++        {"preset": "code_logic_deep", "reason": "code-signals"},
++    ]
++
++
++def test_rebase_restores_active_turn_visual_parts_for_aggregator(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++
++    def fake_call_llm(**kwargs):
++        calls.append(kwargs)
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    facade = MoAChatCompletions("auto_moa")
++    prepared = facade.prepare(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Исправь CSS этого UI"},
++                    {
++                        "type": "image_url",
++                        "image_url": {"url": "data:image/png;base64,AA=="},
++                    },
++                ],
++            }
++        ],
++        turn_id="visual-turn",
++    )
++    rebased = facade.rebase_prepared_request(
++        prepared,
++        [{"role": "user", "content": "[compressed active turn]"}],
++    )
++
++    assert "image_url" in repr(rebased["messages"])
++    reference_calls = [call for call in calls if call["task"] == "moa_reference"]
++    assert reference_calls
++    assert all("image_url" not in repr(call["messages"]) for call in reference_calls)
++
++
++def test_direct_calls_ignore_cache_control_shape_changes_for_turn_identity(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    monkeypatch.setattr(
++        "agent.moa_loop.call_llm",
++        lambda **kwargs: _response(
++            "advice" if kwargs["task"] == "moa_reference" else "acted"
++        ),
++    )
++
++    from agent.moa_loop import MoAChatCompletions
++
++    events = []
++    facade = MoAChatCompletions(
++        "auto_moa",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    facade.create(
++        model="auto_moa",
++        messages=[{"role": "user", "content": "Исправь parser.py"}],
++    )
++    facade.create(
++        model="auto_moa",
++        messages=[
++            {
++                "role": "user",
++                "content": [
++                    {
++                        "type": "text",
++                        "text": "Исправь parser.py",
++                        "cache_control": {"type": "ephemeral"},
++                    }
++                ],
++            },
++            {"role": "assistant", "content": "Проверяю."},
++            {"role": "tool", "tool_call_id": "call-1", "content": "output"},
++        ],
++    )
++
++    routes = [kwargs for event, kwargs in events if event == "moa.route"]
++    assert routes == [{"preset": "code_logic_deep", "reason": "code-signals"}]
++
++
++def test_rebase_restores_visual_parts_from_recent_follow_up_context(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    monkeypatch.setattr(
++        "agent.moa_loop.call_llm",
++        lambda **kwargs: _response(
++            "advice" if kwargs["task"] == "moa_reference" else "acted"
++        ),
++    )
++
++    from agent.moa_loop import MoAChatCompletions
++
++    facade = MoAChatCompletions("auto_moa")
++    prepared = facade.prepare(
++        [
++            {
++                "role": "user",
++                "content": [
++                    {"type": "text", "text": "Исправь CSS этого UI"},
++                    {
++                        "type": "image_url",
++                        "image_url": {"url": "data:image/png;base64,AA=="},
++                    },
++                ],
++            },
++            {"role": "assistant", "content": "Вижу проблему."},
++            {"role": "user", "content": "Продолжай"},
++        ],
++        turn_id="visual-follow-up",
++    )
++    rebased = facade.rebase_prepared_request(
++        prepared,
++        [{"role": "user", "content": "Продолжай"}],
++    )
++
++    assert facade.last_resolved_preset_name == "code_visual_deep"
++    assert "image_url" in repr(rebased["messages"])
++
++
++def test_incomplete_auto_route_graph_fails_before_any_selected_target_runs(tmp_path, monkeypatch):
++    home = tmp_path / ".hermes"
++    _write_auto_config(home)
++    config_path = home / "config.yaml"
++    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
++    del raw["moa"]["presets"]["logic_deep"]
++    config_path.write_text(
++        yaml.safe_dump(raw, sort_keys=False, allow_unicode=True),
++        encoding="utf-8",
++    )
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    calls = []
++    monkeypatch.setattr(
++        "agent.moa_loop.call_llm",
++        lambda **kwargs: calls.append(kwargs) or _response("unexpected"),
++    )
++
++    import pytest
++
++    from agent.moa_loop import MoAChatCompletions
++
++    with pytest.raises(RuntimeError, match="invalid auto_route graph"):
++        MoAChatCompletions("auto_moa").create(
++            model="auto_moa",
++            messages=[{"role": "user", "content": "Исправь parser.py"}],
++        )
++
++    assert calls == []
+\ No newline at end of file
+diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
+new file mode 100644
+index 000000000..8781db710
+--- /dev/null
++++ b/tests/hermes_cli/test_moa_cmd_auto.py
+@@ -0,0 +1,73 @@
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import pytest
++
++from hermes_cli.moa_cmd import _print_config, cmd_moa
++
++
++def test_moa_list_labels_auto_route_and_capability_anchor(capsys):
++    config = {
++        "moa": {
++            "default_preset": "auto_moa",
++            "presets": {
++                "auto_moa": {
++                    "auto_route": {
++                        "code": "code_logic_deep",
++                        "logic": "logic_deep",
++                        "code_visual": "code_visual_deep",
++                        "logic_visual": "logic_visual_deep",
++                        "fallback": "default",
++                        "context_messages": 8,
++                    },
++                    "reference_models": [
++                        {"provider": "nous", "model": "anchor-ref"}
++                    ],
++                    "aggregator": {"provider": "nous", "model": "anchor-agg"},
++                }
++            },
++        }
++    }
++
++    _print_config(config)
++
++    output = capsys.readouterr().out
++    assert "Auto routes:" in output
++    assert "code -> code_logic_deep" in output
++    assert "logic_visual -> logic_visual_deep" in output
++    assert "fallback -> default" in output
++    assert "Context messages: 8" in output
++    assert "Capability anchor (not executed directly):" in output
++
++
++def test_moa_delete_refuses_to_remove_an_auto_route_target():
++    slot = {"provider": "nous", "model": "model"}
++    base = {"reference_models": [slot], "aggregator": slot}
++    config = {
++        "moa": {
++            "default_preset": "target",
++            "presets": {
++                "target": base,
++                "auto_moa": {
++                    **base,
++                    "auto_route": {
++                        "code": "target",
++                        "logic": "target",
++                        "code_visual": "target",
++                        "logic_visual": "target",
++                        "fallback": "target",
++                        "context_messages": 8,
++                    },
++                },
++            },
++        }
++    }
++
++    with (
++        patch("hermes_cli.moa_cmd.load_config", return_value=config),
++        patch("hermes_cli.moa_cmd.save_config") as save,
++        pytest.raises(SystemExit, match="auto_route"),
++    ):
++        cmd_moa(SimpleNamespace(moa_command="delete", name="target"))
++
++    save.assert_not_called()
+\ No newline at end of file
