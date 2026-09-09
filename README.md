@@ -95,14 +95,14 @@ recovery-проекте, поэтому не затирается при `reset 
 
 | Файл | Назначение |
 |---|---|
-| `auto-moa-current.patch` | Патч роутера поверх нативного MoA (база hermes-agent `9fd44b4` = v0.21.1; хуки в `moa_loop`/`moa_config`/`moa_cmd`/`moa_trace` + новый `agent/moa_auto_router.py` + тесты; включает кап `reference_max_tokens` на loop-пути). |
+| `auto-moa-current.patch` | Патч роутера поверх нативного MoA (база hermes-agent `9fd44b4` = v0.21.1; хуки в `moa_loop`/`turn_request_assembly`/`moa_config`/`moa_cmd`/`moa_trace` + новый `agent/moa_auto_router.py` + тесты; включает кап `reference_max_tokens` на обоих путях фан-аута). |
 | `auto-moa-hook.sh` | post-merge git hook для ручного `git pull` (не срабатывает при `hermes update`, т.к. тот использует `reset --hard`). |
-| `auto-moa-watchdog.bat` | Скрипт починки: пере-накатывает патч если `auto_moa_router.py` отсутствует или рассинхрон. |
+| `auto-moa-watchdog.bat` | Скрипт починки: пофайльно донакатывает патч (full apply → per-file salvage с `--include`, уже накаченные файлы пропускаются), если `agent/moa_auto_router.py` отсутствует или рассинхрон; обновляет hook-снапшот. |
 | `hermes-update.bat` | Обёртка `hermes update` с авто-починкой (`--check` → HEALTHY / HEALTHY-NATIVE; `--repair`). |
 | `install-auto-moa.bat` | Установщик: патч + hook + watchdog + cronjob. |
 | `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
 | `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
-| `auto-moa-moa-section.yaml` | Backup шести MoA presets и `auto_route` graph. |
+| `auto-moa-moa-section.yaml` | Backup двенадцати MoA presets и `auto_route` graph. |
 | `check-moa-models.py` / `.bat` | Мониторинг живости моделей схемы (free+pay тиры, без API-ключа) + статус гейта `paid_access` + новые free-модели каталога. |
 | `rotate-moa-model.py` / `.bat` | Ротация выпавшей модели во всех конфигах: `rotate-moa-model.bat <dead> <replacement>`. |
 | `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |
@@ -127,7 +127,7 @@ Free-модели Nous — ротация промо, не контракт: `te
 ```powershell
 # Проверить живость всех моделей схемы (ключ не нужен; вручную или по расписанию):
 check-moa-models.bat            # задачa AutoMoA-ModelCheck, ежедневно 09:00
-# Ротация выпавшей модели во всех 4 конфигах + recovery yaml:
+# Ротация выпавшей модели во всех 5 профилях + recovery yaml:
 rotate-moa-model.bat tencent/hy3:free meituan/longcat-2.0:free
 # После ротации:
 hermes config check
@@ -178,11 +178,18 @@ CLI не печатает ни ошибки, ни warning (проверено id
 - **Агрегатор — high**: пишет финальный ответ и tool-calls. `max` не держим сознательно —
   при деградации качества поднять до `xhigh`/`max` у конкретного пресета.
 
-Кап `reference_max_tokens` реально применяется на loop-пути (`_run_fanout` пробрасывает
-его в `max_tokens` advisor-вызовов; `moa_config` сохраняет ключ при нормализации) —
-до фикса ключ молча терялся, советники работали без капа (замер: 101k символов от одного).
+Кап `reference_max_tokens` реально применяется на обоих путях фан-аута (persistent
+`_run_fanout` и one-shot `_append_moa_context` пробрасывают его в `max_tokens`
+advisor-вызовов; `moa_config` сохраняет ключ при нормализации, плоский вид отдаёт
+кап дефолтного пресета) — до фикса ключ молча терялся, советники работали без капа
+(замер: 101k символов от одного).
 
-### Адекватность reasoning сложности хода (с коммита `cda3c3860`)
+### Адекватность reasoning сложности хода (план, код не приземлён)
+
+> Статус: дизайн ниже **не реализован** — в live-дереве и патче нет `complexity`
+> (`cda3c3860` — не предок `9fd44b4`, `routing.complexity` в трейсах отсутствует).
+> Действует только статика `reasoning_effort` из слотов. Не считать активным
+> до приземления кода + записи в трейс.
 
 Роутер раз в ход считает `complexity` (`trivial` ≤8 слов без кода/картинки/аттача;
 `complex` — длинный текст / свежий визуал / `@url`-контекст / содержательный код;

@@ -11,8 +11,11 @@
 :: ============================================================================
 setlocal
 set "REPO=%LOCALAPPDATA%\hermes\hermes-agent"
-set "PATCH=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\auto-moa-current.patch"
-set "WATCHDOG=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\auto-moa-watchdog.bat"
+set "RECOVERY=%USERPROFILE%\Documents\Hermes-auto-moa-recovery"
+if exist "%~dp0auto-moa-current.patch" set "RECOVERY=%~dp0"
+if "%RECOVERY:~-1%"=="\" set "RECOVERY=%RECOVERY:~0,-1%"
+set "PATCH=%RECOVERY%\auto-moa-current.patch"
+set "WATCHDOG=%RECOVERY%\auto-moa-watchdog.bat"
 set "CMD=%~1"
 if not defined CMD set "CMD=update"
 
@@ -24,7 +27,7 @@ echo Usage: %~nx0 [--check^|update^|repair]
 exit /b 1
 
 :check
-set "SYNC=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\tools\moa_sync.py"
+set "SYNC=%RECOVERY%\tools\moa_sync.py"
 if not exist "%SYNC%" goto :check_failed
 where python >nul 2>&1 || goto :check_failed
 python "%SYNC%" --check >nul 2>&1
@@ -34,6 +37,8 @@ echo [auto-moa] HEALTHY-NATIVE (Hermes ^>= 0.21.1 native MoA presets; custom aut
 exit /b 0
 
 :check_router_ok
+git -C "%REPO%" apply --reverse --check "%PATCH%" >nul 2>&1
+if errorlevel 1 echo [auto-moa] WARNING: source drift outside patch hunks (router present, patch does not reverse-apply cleanly)
 echo [auto-moa] HEALTHY (custom auto-router active)
 exit /b 0
 
@@ -45,7 +50,7 @@ exit /b 1
 call "%WATCHDOG%"
 set "REPAIR_RC=%ERRORLEVEL%"
 if not "%REPAIR_RC%"=="0" exit /b %REPAIR_RC%
-set "SYNC=%USERPROFILE%\Documents\Hermes-auto-moa-recovery\tools\moa_sync.py"
+set "SYNC=%RECOVERY%\tools\moa_sync.py"
 if not exist "%SYNC%" (
   echo [auto-moa] ERROR: sync tool not found: %SYNC%
   exit /b 1

@@ -220,7 +220,7 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index ce2e2bd5c..5eda62a6c 100644
+index ce2e2bd5c..af84f3013 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
 @@ -119,6 +119,82 @@ _preset_cache_lock = threading.Lock()
@@ -350,7 +350,7 @@ index ce2e2bd5c..5eda62a6c 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1191,12 +1277,21 @@ class MoAChatCompletions:
+@@ -1191,12 +1277,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -361,20 +361,17 @@ index ce2e2bd5c..5eda62a6c 100644
 +        None timeout = inherit auxiliary.moa_reference.timeout.
          """
          raw_reference_timeout = preset.get("reference_timeout")
-+        raw_reference_max_tokens = preset.get("reference_max_tokens")
-+        try:
-+            reference_max_tokens = int(raw_reference_max_tokens) if raw_reference_max_tokens else None
-+            if reference_max_tokens is not None and reference_max_tokens <= 0:
-+                reference_max_tokens = None
-+        except (TypeError, ValueError):
-+            reference_max_tokens = None
++        from hermes_cli.moa_config import _coerce_number
++        reference_max_tokens = _coerce_number(
++            preset.get("reference_max_tokens"), int, None, positive=True
++        )
          reference_outputs = _run_references_parallel(
              reference_models, ref_messages, temperature=_preset_temperature(preset, "reference_temperature"),
 +            max_tokens=reference_max_tokens,
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1216,9 +1311,12 @@ class MoAChatCompletions:
+@@ -1216,9 +1308,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -388,7 +385,7 @@ index ce2e2bd5c..5eda62a6c 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1289,6 +1387,111 @@ class MoAChatCompletions:
+@@ -1289,6 +1384,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -500,7 +497,7 @@ index ce2e2bd5c..5eda62a6c 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1320,6 +1523,12 @@ class MoAChatCompletions:
+@@ -1320,6 +1520,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -513,7 +510,7 @@ index ce2e2bd5c..5eda62a6c 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1355,6 +1564,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1355,6 +1561,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -544,6 +541,29 @@ index 06eb962dc..57ca688d0 100644
          with path.open("a", encoding="utf-8") as f:
              f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
      except Exception as exc:  # pragma: no cover - tracing must never break a turn
+diff --git a/agent/turn_request_assembly.py b/agent/turn_request_assembly.py
+index 359553209..99daebcf0 100644
+--- a/agent/turn_request_assembly.py
++++ b/agent/turn_request_assembly.py
+@@ -43,6 +43,7 @@ def _append_moa_context(agent: Any, api_messages: Any, moa_config: Any, original
+     try:
+         from agent.message_content import flatten_message_text as _flatten_mt
+         from agent.moa_loop import _preset_temperature, aggregate_moa_context
++        from hermes_cli.moa_config import _coerce_number
+ 
+         _moa_context = aggregate_moa_context(
+             user_prompt=(
+@@ -57,6 +58,10 @@ def _append_moa_context(agent: Any, api_messages: Any, moa_config: Any, original
+             aggregator=moa_config.get("aggregator") or {},
+             temperature=_preset_temperature(moa_config, "reference_temperature"),
+             aggregator_temperature=_preset_temperature(moa_config, "aggregator_temperature"),
++            # Advisor output cap (same preset key as the persistent loop path).
++            reference_max_tokens=_coerce_number(
++                moa_config.get("reference_max_tokens"), int, None, positive=True
++            ),
+ 
+             # None = no per-preset override; inherit auxiliary.moa_reference.timeout.
+             reference_timeout=(
 diff --git a/hermes_cli/moa_cmd.py b/hermes_cli/moa_cmd.py
 index eb2939f62..9359166bc 100644
 --- a/hermes_cli/moa_cmd.py
@@ -896,10 +916,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..925616928
+index 000000000..5e1aa8d29
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,659 @@
+@@ -0,0 +1,709 @@
 +from __future__ import annotations
 +
 +import json
@@ -1370,6 +1390,56 @@ index 000000000..925616928
 +
 +    assert cfg["presets"]["default"]["reference_max_tokens"] is None
 +    assert cfg["presets"]["zero"]["reference_max_tokens"] is None
++
++
++def test_reference_max_tokens_coercion_edges_and_flat_view():
++    from hermes_cli.moa_config import normalize_moa_config
++
++    cfg = normalize_moa_config(
++        {
++            "default_preset": "capped",
++            "presets": {
++                "capped": {
++                    "reference_max_tokens": "2048.0",
++                    "reference_models": [{"provider": "t", "model": "m"}],
++                    "aggregator": {"provider": "t", "model": "a"},
++                },
++                "negative": {
++                    "reference_max_tokens": -5,
++                    "reference_models": [{"provider": "t", "model": "m"}],
++                    "aggregator": {"provider": "t", "model": "a"},
++                },
++            },
++        }
++    )
++
++    assert cfg["presets"]["capped"]["reference_max_tokens"] == 2048
++    assert cfg["presets"]["negative"]["reference_max_tokens"] is None
++    # Flat dashboard view mirrors the default preset.
++    assert cfg["reference_max_tokens"] == 2048
++
++
++def test_append_moa_context_forwards_reference_max_tokens(monkeypatch):
++    from agent import turn_request_assembly
++
++    seen = {}
++
++    def fake_aggregate(**kwargs):
++        seen.update(kwargs)
++        return "guidance"
++
++    monkeypatch.setattr("agent.moa_loop.aggregate_moa_context", fake_aggregate)
++
++    api_messages = [{"role": "user", "content": "вопрос"}]
++    turn_request_assembly._append_moa_context(
++        None,
++        api_messages,
++        {"reference_models": [], "aggregator": {}, "reference_max_tokens": 1024},
++        "вопрос",
++    )
++
++    assert seen.get("reference_max_tokens") == 1024
++    assert api_messages[-1]["content"].endswith("guidance")
 +
 +
 +def test_different_turn_ids_route_identical_prompts_independently(tmp_path, monkeypatch):
