@@ -12,7 +12,9 @@ check-moa-models.py -text
 check-moa-models.bat -text
 rotate-moa-model.py -text
 rotate-moa-model.bat -text
+run-moa-tests.bat -text
 tools/moa_sync.py text eol=lf
+tools/live_tree_check.py text eol=lf
 
 # Documentation stays normalized.
 README.md text eol=lf
