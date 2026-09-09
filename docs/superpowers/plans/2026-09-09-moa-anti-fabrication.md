@@ -104,8 +104,8 @@ Expected: exit 0, all tests pass (count printed at tail).
 
 Detection rule (exact): a line starts a tool-shaped block if it matches any of
 `^\s*\[called tool:`, `^\s*\[tool result`, `containerTag\s*[:=]`, `"\s*exit_code\s*"\s*:`.
-A block = that line plus following non-blank lines, capped at 10 lines total.
-Naked check: collapse whitespace in block and in `context_text`; if the block is NOT a substring → cut, replace with `[removed unverified tool-output claim]`, `removed += 1`. Else wrap the block as `[UNVERIFIED-CLAIM, quoted from context — not executed by the advisor]\n{block}`, `marked += 1`. Text without markers returns unchanged with `(0, 0)`.
+Each matching line is judged on its own as a single-line block (deliberately NOT grouped with following lines: grouping merged adjacent markers plus trailing prose into one block and ate legitimate advice in the spec's own tests).
+Naked check: collapse whitespace in the line and in `context_text`; if the line is NOT a substring → cut, replace with `[removed unverified tool-output claim]`, `removed += 1`. Else wrap the line as `[UNVERIFIED-CLAIM, quoted from context — not executed by the advisor]` + the line, `marked += 1`. Text without markers returns unchanged with `(0, 0)`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -171,7 +171,6 @@ _TOOL_CLAIM_RES = (
     re.compile(r"containerTag\s*[:=]"),
     re.compile(r"\"\s*exit_code\s*\"\s*:"),
 )
-_TOOL_CLAIM_BLOCK_CAP = 10
 _REMOVED_TOOL_CLAIM_NOTE = "[removed unverified tool-output claim]"
 
 
@@ -193,15 +192,9 @@ def _scrub_unverified_tool_claims(text: str, context_text: str) -> tuple[str, in
     index = 0
     while index < len(lines):
         if any(rx.search(lines[index]) for rx in _TOOL_CLAIM_RES):
+            # Single-line blocks (see Detection rule above for why).
             block = [lines[index]]
             index += 1
-            while (
-                index < len(lines)
-                and lines[index].strip()
-                and len(block) < _TOOL_CLAIM_BLOCK_CAP
-            ):
-                block.append(lines[index])
-                index += 1
             collapsed_block = " ".join(" ".join(block).split())
             if collapsed_block and collapsed_block in collapsed_context:
                 out.append(
