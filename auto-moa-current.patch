@@ -220,7 +220,7 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index ce2e2bd5c..5668cd40b 100644
+index ce2e2bd5c..f56585b98 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
 @@ -119,6 +119,82 @@ _preset_cache_lock = threading.Lock()
@@ -306,7 +306,19 @@ index ce2e2bd5c..5668cd40b 100644
  def _resolve_preset_cached(preset_name: str) -> tuple[dict[str, Any], Any]:
      """``(preset, raw moa config)``; the resolved preset is cached per config mtime
      (skips resolve_moa_preset's full validation of the moa block on every create())."""
-@@ -207,6 +283,17 @@ _REFERENCE_SYSTEM_PROMPT = (
+@@ -167,6 +243,11 @@ class _RefAccounting:
+     _: KW_ONLY
+     messages: Any = None
+     output: str | None = None
++    # Per-advisor anti-fabrication counts, attached by ``_scrub_reference_outputs``
++    # so the trace can show exactly what each advisor produced vs what was handed
++    # to the aggregator (None = advisor untouched by the scrubber).
++    scrub_removed: int | None = None
++    scrub_marked: int | None = None
+     model: str | None = None
+     provider: str | None = None
+     temperature: Any = None
+@@ -207,6 +288,17 @@ _REFERENCE_SYSTEM_PROMPT = (
      "tools or access. Your response is private guidance handed to the "
      "aggregator, not an answer shown to the user. NEVER claim to have executed "
      "anything."
@@ -324,7 +336,7 @@ index ce2e2bd5c..5668cd40b 100644
  )
  
  
-@@ -739,6 +826,114 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
+@@ -739,6 +831,141 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
      return joined
  
  
@@ -352,9 +364,6 @@ index ce2e2bd5c..5668cd40b 100644
 +    r"""^\s*["{\[(]\s*"?[\w .-]+"?\s*[:=]"""  # {"key": / {'key': / [key= / (key:
 +)
 +_REMOVED_TOOL_CLAIM_NOTE = "[removed unverified tool-output claim]"
-+# Per-call memo of quoted-judgments: keyed by collapsed block text, reset for every
-+# scrub call (context differs per advisor turn, so a module-global cache would be wrong).
-+_QUOTED_CACHE: dict[str, bool] = {}
 +
 +
 +def _scrub_unverified_tool_claims(text: str, context_text: str) -> tuple[str, int, int]:
@@ -371,7 +380,10 @@ index ce2e2bd5c..5668cd40b 100644
 +    """
 +    if not isinstance(text, str) or not text:
 +        return text, 0, 0
-+    _QUOTED_CACHE.clear()  # judgments are valid only for THIS context
++    # Per-call memo of quoted-judgments. Context differs per advisor turn and the
++    # fan-out is parallel, so a module-global cache would be both wrong and a
++    # thread-safety hazard; a local dict keeps this a pure function (m4).
++    quoted_cache: dict[str, bool] = {}
 +    collapsed_context = " ".join(str(context_text or "").split())
 +    lines = text.splitlines()
 +    out: list[str] = []
@@ -395,22 +407,49 @@ index ce2e2bd5c..5668cd40b 100644
 +                # collapsed block: log-echo advisors repeat identical lines hundreds
 +                # of times and each check is an O(len(context)) substring scan (m4).
 +                collapsed_block = " ".join(stripped.split())
-+                quoted = _QUOTED_CACHE.get(collapsed_block)
++                quoted = quoted_cache.get(collapsed_block)
 +                if quoted is None:
 +                    variant = collapsed_block.replace("]: ", ": ")
 +                    quoted = bool(collapsed_block) and (
 +                        collapsed_block in collapsed_context
 +                        or variant in collapsed_context
 +                    )
-+                    _QUOTED_CACHE[collapsed_block] = quoted
++                    quoted_cache[collapsed_block] = quoted
 +                if quoted:
-+                    out.append(
-+                        "[UNVERIFIED-CLAIM, quoted from context — not executed "
-+                        "by the advisor]"
-+                    )
-+                    out.append(lines[index])
-+                    marked += 1
++                    # One banner per RUN of consecutive quoted lines, not per line:
++                    # per-line markers bloat the aggregator prompt and leak into the
++                    # next turn's advisory view, where advisors start imitating them.
++                    run = [lines[index]]
 +                    index += 1
++                    while index < len(lines):
++                        nxt_stripped = _CLAIM_PREFIX_RE.sub("", lines[index], count=1)
++                        if not any(rx.search(nxt_stripped) for rx in _TOOL_CLAIM_RES):
++                            break
++                        nxt_collapsed = " ".join(nxt_stripped.split())
++                        nxt_quoted = quoted_cache.get(nxt_collapsed)
++                        if nxt_quoted is None:
++                            nxt_variant = nxt_collapsed.replace("]: ", ": ")
++                            nxt_quoted = bool(nxt_collapsed) and (
++                                nxt_collapsed in collapsed_context
++                                or nxt_variant in collapsed_context
++                            )
++                            quoted_cache[nxt_collapsed] = nxt_quoted
++                        if not nxt_quoted:
++                            break
++                        run.append(lines[index])
++                        index += 1
++                    if len(run) == 1:
++                        out.append(
++                            "[UNVERIFIED-CLAIM, quoted from context — not executed "
++                            "by the advisor]"
++                        )
++                    else:
++                        out.append(
++                            f"[UNVERIFIED-CLAIM, {len(run)} lines quoted from context — "
++                            "not executed by the advisor]"
++                        )
++                    out.extend(run)
++                    marked += len(run)
 +                    continue
 +                # Naked marker: consume following JSON-shaped payload lines so a
 +                # multi-line fabricated result is removed WHOLE (M2).
@@ -439,7 +478,7 @@ index ce2e2bd5c..5668cd40b 100644
  def _sum_reference_accounting(outputs: list[tuple[str, str, Any]]) -> tuple[Any, Any]:
      """Sum fan-out usage AND cost in dollars (each advisor priced at its OWN rate)."""
      usage = CanonicalUsage()
-@@ -776,6 +971,42 @@ def _guidance_inputs(
+@@ -776,6 +1003,51 @@ def _guidance_inputs(
      return agg_refs, _degraded_notice(failed_labels, policy), bool(reference_outputs) and not successful
  
  
@@ -463,26 +502,35 @@ index ce2e2bd5c..5668cd40b 100644
 +        )
 +        scrubbed: list[tuple[str, str, Any]] = []
 +        total_removed = total_marked = 0
++        per_advisor: list[str] = []
 +        for label, text, acct in reference_outputs:
 +            clean, removed, marked = _scrub_unverified_tool_claims(text, context_text)
 +            total_removed += removed
 +            total_marked += marked
++            if removed or marked:
++                per_advisor.append(f"{label}: removed={removed} marked={marked}")
++                if isinstance(acct, _RefAccounting):
++                    # Ride the counts on the accounting object so the trace (which
++                    # reads acct fields) can audit per-advisor scrub impact.
++                    acct = replace(acct, scrub_removed=removed, scrub_marked=marked)
 +            scrubbed.append((label, clean, acct))
 +        if total_removed or total_marked:
 +            logger.warning(
-+                "MoA scrubbed unverified tool claims in advisor outputs: removed=%d marked=%d",
-+                total_removed, total_marked,
++                "MoA scrubbed unverified tool claims in advisor outputs: removed=%d marked=%d (%s)",
++                total_removed, total_marked, "; ".join(per_advisor),
 +            )
 +        return scrubbed, total_removed, total_marked
-+    except Exception:  # pragma: no cover - fail-open, never break a turn
-+        logger.debug("MoA advisor-output scrubbing failed", exc_info=True)
++    except Exception as exc:  # pragma: no cover - fail-open, never break a turn
++        # A dead scrubber is a silently lost safety net: surface it at warning
++        # level, keep the raw output so the turn is not harmed.
++        logger.warning("MoA advisor-output scrubbing failed: %s", exc, exc_info=True)
 +        return reference_outputs, 0, 0
 +
 +
  def aggregate_moa_context(
      *, user_prompt: str, api_messages: list[dict[str, Any]], reference_models: list[dict[str, Any]],
      aggregator: dict[str, Any], temperature: float | None = None, aggregator_temperature: float | None = None,
-@@ -806,6 +1037,15 @@ def aggregate_moa_context(
+@@ -806,6 +1078,15 @@ def aggregate_moa_context(
      except Exception:  # pragma: no cover - privacy filter must never break a turn
          logger.debug("MoA privacy filter check failed", exc_info=True)
      agg_refs, degraded, all_failed = _guidance_inputs(reference_outputs, privacy_full, degraded_reference_policy)
@@ -498,7 +546,7 @@ index ce2e2bd5c..5668cd40b 100644
      joined = _join_reference_outputs(agg_refs, degraded)
      if all_failed:
          # Skip the aggregator: synthesizing over nothing can block for the full provider timeout.
-@@ -943,6 +1183,14 @@ class MoAChatCompletions:
+@@ -943,6 +1224,14 @@ class MoAChatCompletions:
          self.preset_name = preset_name or "default"
          self.reference_callback = reference_callback
          self._agent = agent
@@ -513,7 +561,7 @@ index ce2e2bd5c..5668cd40b 100644
          # Reference cache keyed on the advisory-view signature (HIT = no re-run, no re-emit).
          self._ref_cache_key: tuple | None = None
          self._ref_cache_outputs: list[tuple[str, str, Any]] = []
-@@ -1016,6 +1264,7 @@ class MoAChatCompletions:
+@@ -1016,6 +1305,7 @@ class MoAChatCompletions:
                  aggregator_provider=agg_slot.get("provider"), aggregator_temperature=pending.get("aggregator_temperature"),
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output, aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -521,7 +569,7 @@ index ce2e2bd5c..5668cd40b 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1028,10 +1277,10 @@ class MoAChatCompletions:
+@@ -1028,10 +1318,10 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -534,7 +582,7 @@ index ce2e2bd5c..5668cd40b 100644
  
      def rebase_prepared_request(self, prepared: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
          """Re-attach already-generated guidance to a rebuilt (compressed) transcript."""
-@@ -1039,6 +1288,7 @@ class MoAChatCompletions:
+@@ -1039,6 +1329,7 @@ class MoAChatCompletions:
          agg_messages = [dict(message) for message in messages]
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
@@ -542,7 +590,7 @@ index ce2e2bd5c..5668cd40b 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1191,12 +1441,18 @@ class MoAChatCompletions:
+@@ -1191,12 +1482,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -563,18 +611,19 @@ index ce2e2bd5c..5668cd40b 100644
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1205,6 +1461,10 @@ class MoAChatCompletions:
+@@ -1205,6 +1502,11 @@ class MoAChatCompletions:
          # An interrupted fan-out is a partial snapshot: never cache it (a HIT would
          # replay placeholder notes every iteration).
          interrupted = any(text == _INTERRUPTED_REFERENCE_NOTE for _lbl, text, _acct in reference_outputs)
-+        # Defense-in-depth: strip fabricated tool blocks BEFORE caching/trace/guidance
-+        # so every downstream consumer (cache, traces, metrics, aggregator prompt)
-+        # sees the cleaned text. Failures are reported, not fatal.
++        # Defense-in-depth: strip fabricated tool blocks BEFORE caching/guidance so
++        # the cache and the aggregator prompt never carry the fabrication. The trace
++        # keeps the RAW advisor output for forensics and records guidance_output +
++        # per-advisor scrub counts alongside it. Failures are reported, not fatal.
 +        reference_outputs, _scrub_removed, _scrub_marked = _scrub_reference_outputs(reference_outputs, ref_messages)
          self._ref_cache_key = None if interrupted else cache_key
          self._ref_cache_outputs = [] if interrupted else list(reference_outputs)
          # Fold advisor spend into accounting exactly once per turn.
-@@ -1216,9 +1476,12 @@ class MoAChatCompletions:
+@@ -1216,9 +1518,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -588,7 +637,7 @@ index ce2e2bd5c..5668cd40b 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1274,6 +1537,9 @@ class MoAChatCompletions:
+@@ -1274,6 +1579,9 @@ class MoAChatCompletions:
                  f"References: {', '.join(label for label, _, _ in agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
                  "answer the user directly or call tools as needed.\n\n"
@@ -598,7 +647,7 @@ index ce2e2bd5c..5668cd40b 100644
                  f"{_join_reference_outputs(agg_refs, degraded)}"
              )
          return None
-@@ -1289,6 +1555,111 @@ class MoAChatCompletions:
+@@ -1289,6 +1597,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -710,7 +759,7 @@ index ce2e2bd5c..5668cd40b 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1320,6 +1691,12 @@ class MoAChatCompletions:
+@@ -1320,6 +1733,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -723,7 +772,7 @@ index ce2e2bd5c..5668cd40b 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1355,6 +1732,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1355,6 +1774,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -733,10 +782,37 @@ index ce2e2bd5c..5668cd40b 100644
  
  
 diff --git a/agent/moa_trace.py b/agent/moa_trace.py
-index 06eb962dc..57ca688d0 100644
+index 06eb962dc..92893da71 100644
 --- a/agent/moa_trace.py
 +++ b/agent/moa_trace.py
-@@ -76,7 +76,7 @@ def save_moa_turn(
+@@ -49,13 +49,24 @@ _ACCT_FIELDS = ("model", "provider", "temperature")
+ _COST_FIELDS = ("cost_usd", "cost_status", "cost_source")
+ 
+ 
+-def _slot_trace(acct: Any, label: str) -> dict[str, Any]:
++def _slot_trace(acct: Any, label: str, text: Any = None) -> dict[str, Any]:
+     """One reference's _RefAccounting as a full trace dict, including the FULL
+-    input messages and output (not the truncated display preview)."""
++    input messages and output (not the truncated display preview).
++
++    ``output`` is the RAW advisor output (forensics: exactly what the model
++    said, pre-scrub). ``guidance_output`` is the text the aggregator was actually
++    handed after the anti-fabrication scrub, and ``scrub`` carries the per-advisor
++    removed/marked counts, so the intervention is auditable from the trace alone.
++    """
+     usage = getattr(acct, "usage", None)
+     return {
+         "label": label, **{f: getattr(acct, f, None) for f in _ACCT_FIELDS},
+         "input_messages": getattr(acct, "messages", None), "output": getattr(acct, "output", None),
++        "guidance_output": text,
++        "scrub": {
++            "removed": getattr(acct, "scrub_removed", None),
++            "marked": getattr(acct, "scrub_marked", None),
++        },
+         "usage": {f: getattr(usage, f, 0) for f in _USAGE_FIELDS} if usage is not None else {},
+         **{f: getattr(acct, f, None) for f in _COST_FIELDS},
+     }
+@@ -76,7 +87,7 @@ def save_moa_turn(
      *, session_id: Optional[str], preset_name: str, reference_outputs: list[tuple[str, str, Any]],
      aggregator_label: str, aggregator_model: Optional[str], aggregator_provider: Optional[str],
      aggregator_temperature: Any, aggregator_input_messages: Any, aggregator_output: Optional[str],
@@ -745,7 +821,16 @@ index 06eb962dc..57ca688d0 100644
  ) -> None:
      """Append one full MoA turn record to the session's trace JSONL, if enabled.
  
-@@ -109,6 +109,8 @@ def save_moa_turn(
+@@ -101,7 +112,7 @@ def save_moa_turn(
+             "ts": time.time(),
+             "session_id": session_id,
+             "preset": preset_name,
+-            "references": [_slot_trace(acct, label) for label, _text, acct in reference_outputs],
++            "references": [_slot_trace(acct, label, text) for label, text, acct in reference_outputs],
+             "aggregator": {
+                 "label": aggregator_label, "model": aggregator_model,
+                 "provider": aggregator_provider, "temperature": aggregator_temperature,
+@@ -109,6 +120,8 @@ def save_moa_turn(
                  "streamed": aggregator_streamed, "output_location": output_location,
              },
          }
@@ -1129,10 +1214,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..4a44f2ecc
+index 000000000..fc9d95c2c
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,973 @@
+@@ -0,0 +1,1053 @@
 +from __future__ import annotations
 +
 +import json
@@ -2106,6 +2191,86 @@ index 000000000..4a44f2ecc
 +    # The rendered advisory preview IS quoted verbatim -> must be marked, not cut.
 +    assert "[UNVERIFIED-CLAIM" in guidance
 +    assert "[removed unverified tool-output claim]" not in guidance
++
++
++# ---- Trace auditability + scrubber hygiene (2026-09-11) ----
++
++
++def test_scrub_groups_consecutive_quoted_lines_under_one_banner():
++    """Advisor quoting a run of transcript lines gets ONE marker, not one per line:
++    per-line markers bloat the aggregator prompt and leak into the next turn's
++    advisory view, where advisors start imitating them."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    ctx = 'лог: [tool result]: {"output": "ok"} [tool result]: {"output": "ok"} конец'
++    text = (
++        "Совет.\n"
++        '[tool result]: {"output": "ok"}\n'
++        '[tool result]: {"output": "ok"}\n'
++        "Дальше сам."
++    )
++    scrubbed, removed, marked = _scrub_unverified_tool_claims(text, ctx)
++    assert removed == 0
++    assert marked == 2
++    assert scrubbed.count("[UNVERIFIED-CLAIM") == 1, "one banner per run, not per line"
++    assert "2 lines quoted from context" in scrubbed
++
++
++def test_scrub_run_breaks_on_naked_line():
++    """A quoted run must not swallow a naked fabricated marker in its middle."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    ctx = 'лог: [tool result]: {"output": "ok"} конец'
++    text = (
++        '[tool result]: {"output": "ok"}\n'
++        '[called tool: terminal({"command":"ps"})]\n'
++        '[tool result]: {"output": "ok"}'
++    )
++    scrubbed, removed, marked = _scrub_unverified_tool_claims(text, ctx)
++    # The naked line is cut; the two quoted lines around it stay marked (two runs).
++    assert (removed, marked) == (1, 2)
++    assert scrubbed.count("[UNVERIFIED-CLAIM") == 2
++    assert "[removed unverified tool-output claim]" in scrubbed
++
++
++def test_scrub_reference_outputs_attaches_per_advisor_counts():
++    """The scrubber must ride removed/marked counts on the accounting object so
++    the trace can show per-advisor impact (and the log can attribute)."""
++    from agent.moa_loop import CanonicalUsage, _RefAccounting, _scrub_reference_outputs
++
++    acct = _RefAccounting(usage=CanonicalUsage())
++    outputs = [("nous:test/free", '[called tool: terminal({"command":"ps"})]', acct)]
++    scrubbed, removed, marked = _scrub_reference_outputs(
++        outputs, [{"role": "user", "content": "пустой контекст"}]
++    )
++    assert (removed, marked) == (1, 0)
++    assert scrubbed[0][2].scrub_removed == 1
++    assert scrubbed[0][2].scrub_marked == 0
++
++
++def test_trace_slot_records_guidance_output_and_scrub_counts():
++    """The trace must keep the RAW advisor output for forensics and record what
++    the aggregator actually saw plus the scrub counts (auditability)."""
++    from agent.moa_loop import CanonicalUsage, _RefAccounting
++    from agent.moa_trace import _slot_trace
++
++    acct = _RefAccounting(
++        usage=CanonicalUsage(), output="RAW советника", scrub_removed=2, scrub_marked=1,
++    )
++    trace = _slot_trace(acct, "nous:test/free", "CLEAN текст для агрегатора")
++    assert trace["output"] == "RAW советника"
++    assert trace["guidance_output"] == "CLEAN текст для агрегатора"
++    assert trace["scrub"] == {"removed": 2, "marked": 1}
++
++
++def test_trace_slot_without_scrub_data_is_null_safe():
++    from agent.moa_loop import CanonicalUsage, _RefAccounting
++    from agent.moa_trace import _slot_trace
++
++    acct = _RefAccounting(usage=CanonicalUsage(), output="текст")
++    trace = _slot_trace(acct, "nous:test/free")
++    assert trace["guidance_output"] is None
++    assert trace["scrub"] == {"removed": None, "marked": None}
 diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
 new file mode 100644
 index 000000000..8781db710
