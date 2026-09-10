@@ -102,7 +102,7 @@ recovery-проекте, поэтому не затирается при `reset 
 | `install-auto-moa.bat` | Установщик: патч + hook + watchdog + cronjob. |
 | `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
 | `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
-| `auto-moa-moa-section.yaml` | Канонический граф MoA: 12 presets + `auto_route` + `profile_overrides`; источник истины и база для `tools/moa_sync.py --check/--sync`. Осторожно: `--sync` пересобирает ВЕСЬ config через PyYAML и теряет комментарии. |
+| `auto-moa-moa-section.yaml` | Канонический граф MoA: 12 presets + `auto_route` + `profile_overrides`; источник истины для `tools/moa_sync.py --check/--sync`. С 10.09.2026 `--sync` вшивает только `moa:`-блок и комментарии конфигов не трогает (регрессия в `tools/tests/test_moa_sync_splice.py`). |
 | `check-moa-models.py` / `.bat` | Мониторинг живости моделей схемы (free+pay тиры, без API-ключа) + статус гейта `paid_access` + новые free-модели каталога. |
 | `rotate-moa-model.py` / `.bat` | Ротация выпавшей модели во всех конфигах: `rotate-moa-model.bat <dead> <replacement>`. |
 | `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |

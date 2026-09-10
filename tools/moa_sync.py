@@ -42,9 +42,43 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def dump_yaml(data: dict[str, Any]) -> bytes:
-    text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
-    return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+def render_moa_block(moa: dict[str, Any], newline: str = "\n") -> str:
+    """Serialize just the ``moa`` mapping as a top-level block."""
+    text = yaml.safe_dump(
+        {"moa": moa}, sort_keys=False, allow_unicode=True,
+        default_flow_style=False, width=4096,
+    )
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.replace("\n", newline) if newline != "\n" else text
+
+
+def splice_moa_block(text: str, moa: dict[str, Any]) -> str:
+    """Replace ONLY the top-level ``moa:`` block; every other line stays byte-identical.
+
+    Serializing the whole document through PyYAML drops every comment it did not
+    produce -- ``profiles/aiqa/config.yaml``, ``profiles/fantrax/config.yaml`` and
+    ``profiles/local-llm-lab/config.yaml`` carry 36 comment lines each, and the
+    comments that document the MoA rationale live there. Splicing touches only the
+    lines this tool owns. Comments placed *inside* the ``moa:`` block are the one
+    documented casualty (no live config has any).
+    """
+    lines = text.splitlines(keepends=True)
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == "moa:" and not line[:1].isspace()),
+        None,
+    )
+    if start is None:
+        raise ValueError("config has no top-level 'moa:' block to replace")
+    # A comment can never open a top-level block, so a '#' line never ends the moa
+    # block -- even at column 0 (YAML allows it, and treating it as the boundary
+    # would leave the rest of the old moa: block behind, as a field bug did).
+    end = next(
+        (j for j in range(start + 1, len(lines))
+         if lines[j].strip() and not lines[j].lstrip().startswith("#") and not lines[j][:1].isspace()),
+        len(lines),
+    )
+    newline = "\r\n" if "\r\n" in text else "\n"
+    return "".join(lines[:start]) + render_moa_block(moa, newline) + "".join(lines[end:])
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -248,7 +282,10 @@ def main() -> int:
     if args.sync:
         backup_root = Path(os.environ.get("LOCALAPPDATA", str(args.repo))) / "hermes" / "backups"
         backup_dir = backup_root / f"moa-sync-{timestamp}"
-        backup_dir.mkdir(parents=True, exist_ok=False)
+        # exist_ok: the dir name is second-resolution, so a re-run inside the same
+        # second (or a retry loop) must not crash with FileExistsError. Backups are
+        # always the state immediately before this write, so overwriting is right.
+        backup_dir.mkdir(parents=True, exist_ok=True)
         for name, path in PROFILE_PATHS.items():
             shutil.copy2(path, backup_dir / f"{name}.config.yaml")
         print(f"backups: {backup_dir}")
@@ -266,8 +303,10 @@ def main() -> int:
         if not exact_same:
             changed += 1
         if args.sync and (not exact_same or errors):
-            data["moa"] = desired
-            atomic_write(path, dump_yaml(data))
+            # Splice, never re-serialize the whole document: PyYAML would eat the comments.
+            with path.open("r", encoding="utf-8", newline="") as fh:
+                original = fh.read()
+            atomic_write(path, splice_moa_block(original, desired).encode("utf-8"))
             data = load_yaml(path)
             errors = semantic_checks(name, data)
             if catalog is not None:

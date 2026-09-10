@@ -25,6 +25,13 @@ mkdir "%BASE%" >nul 2>&1
 pushd "%REPO%" || exit /b 2
 "%VENV%" -m pytest tests/agent/test_moa_auto_router.py tests/agent/test_moa_auto_runtime.py tests/agent/test_moa_slot_max_tokens.py tests/agent/test_moa_reasoning_effort.py tests/agent/test_moa_context_max_tokens.py tests/hermes_cli/test_moa_config.py tests/hermes_cli/test_moa_cmd_auto.py tests/hermes_cli/test_moa_set_models_preserves_extra_keys.py -p no:cacheprovider --basetemp="%BASE%" --tb=short -q
 set "RC=%ERRORLEVEL%"
+
+:: Recovery-repo tooling tests (comment-preserving moa config splice).
+set "RECOVERY=%USERPROFILE%\Documents\Hermes-auto-moa-recovery"
+if exist "%RECOVERY%\tools\tests" (
+  "%VENV%" -m pytest "%RECOVERY%\tools\tests" -p no:cacheprovider --basetemp="%BASE%" --tb=short -q
+  if errorlevel 1 set "RC=1"
+)
 popd
 rmdir /s /q "%BASE%" >nul 2>&1
 exit /b %RC%
