@@ -220,7 +220,7 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index ce2e2bd5c..47d8806e1 100644
+index ce2e2bd5c..2ee1f930b 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
 @@ -119,6 +119,82 @@ _preset_cache_lock = threading.Lock()
@@ -324,15 +324,32 @@ index ce2e2bd5c..47d8806e1 100644
  )
  
  
-@@ -739,6 +826,62 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
+@@ -739,6 +826,105 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
      return joined
  
  
 +_TOOL_CLAIM_RES = (
 +    re.compile(r"^\s*\[called tool:"),
 +    re.compile(r"^\s*\[tool result"),
-+    re.compile(r"containerTag\s*[:=]"),
-+    re.compile(r"\"\s*exit_code\s*\"\s*:"),
++    # containerTag:<single-token-value> — the fabricated-echo shape. A value with
++    # spaces is prose discussing the field ('containerTag: проверь написание') —
++    # anchor + token-value keeps that legit prose from being cut (m2).
++    re.compile(r"^\s*containerTag\s*[:=]\s*\S+\s*$"),
++    re.compile(r"^\s*\"\s*exit_code\s*\"\s*:"),
++    # Fabricated bare JSON result object as a whole line ({"exit_code": 0, ...}).
++    re.compile(r"^\s*\{\s*\"exit_code\""),
++)
++# Optional leading prose the Provenance contract itself induces: a quote under the
++# VERIFIED: heading or a markdown bullet. Without stripping these prefixes a
++# fabricated '[tool result] ...' under 'VERIFIED:' (the exact shape the contract
++# asks for) bypasses both removal and marking (M1).
++_CLAIM_PREFIX_RE = re.compile(r"^\s*(?:[-*+]\s+|VERIFIED:\s*|INFERRED:\s*)")
++# A bare fabricated payload line following a shaped marker: JSON-ish key-value text.
++# Only judged when the marker itself was naked — the block is then removed WHOLE
++# (multi-line fabrication M2). Anchored to JSON-shaped openers so legit prose after
++# an already-handled marker is untouched.
++_PAYLOAD_LINE_RE = re.compile(
++    r"""^\s*["{\[(]\s*"?[\w .-]+"?\s*[:=]"""  # {"key": / {'key': / [key= / (key:
 +)
 +_REMOVED_TOOL_CLAIM_NOTE = "[removed unverified tool-output claim]"
 +
@@ -342,7 +359,11 @@ index ce2e2bd5c..47d8806e1 100644
 +
 +    A block matching _TOOL_CLAIM_RES is 'quoted' only if its whitespace-collapsed
 +    text is a substring of the collapsed advisory input; quoted blocks are kept
-+    with an [UNVERIFIED-CLAIM ...] wrapper, naked ones are cut. Returns
++    with an [UNVERIFIED-CLAIM ...] wrapper, naked ones are cut. The judge compares
++    the CLAIM SUFFIX after optional leading prose (bullet / VERIFIED: / INFERRED:)
++    so a fabricated marker under a 'VERIFIED:' heading is still caught. A naked
++    marker also consumes following JSON-shaped payload lines (multi-line
++    fabrication) up to the first non-payload line. Returns
 +    ``(scrubbed_text, removed_count, marked_count)``. Pure function, no I/O.
 +    """
 +    if not isinstance(text, str) or not text:
@@ -354,24 +375,46 @@ index ce2e2bd5c..47d8806e1 100644
 +    marked = 0
 +    index = 0
 +    while index < len(lines):
-+        if any(rx.search(lines[index]) for rx in _TOOL_CLAIM_RES):
-+            # Single-line blocks: each tool-shaped line is judged on its own.
-+            # (Spec draft grouped following non-blank lines, which merged
-+            # adjacent markers + trailing prose into one block and broke the
-+            # scrub_ tests: removed==1 vs expected 2, quoted marked as naked.)
-+            block = [lines[index]]
-+            index += 1
-+            collapsed_block = " ".join(" ".join(block).split())
-+            if collapsed_block and collapsed_block in collapsed_context:
-+                out.append(
-+                    "[UNVERIFIED-CLAIM, quoted from context — not executed "
-+                    "by the advisor]"
++        # Judge the PROSE-STRIPPED form: 'VERIFIED: [tool result] ...' or
++        # '- [called tool: ...]' carry the same claim as the bare marker, and the
++        # Provenance contract directs quotes under VERIFIED:, so the prefix must
++        # not mask the filter (M1). The stripped suffix is what gets judged.
++        stripped = _CLAIM_PREFIX_RE.sub("", lines[index], count=1)
++        if stripped != lines[index] or any(
++            rx.search(lines[index]) for rx in _TOOL_CLAIM_RES
++        ):
++            if any(rx.search(stripped) for rx in _TOOL_CLAIM_RES):
++                # Single-line block: judged on the stripped claim text. The advisory
++                # view renders '[tool result: X]' (colon inside) while echoing models
++                # commonly write '[tool result]: X' — accept both bracket placements
++                # before declaring the block unquoted.
++                collapsed_block = " ".join(stripped.split())
++                quoted = collapsed_block and (
++                    collapsed_block in collapsed_context
++                    or collapsed_block.replace("]: ", ": ")
++                    in collapsed_context
 +                )
-+                out.extend(block)
-+                marked += 1
-+            else:
++                if quoted:
++                    out.append(
++                        "[UNVERIFIED-CLAIM, quoted from context — not executed "
++                        "by the advisor]"
++                    )
++                    out.append(lines[index])
++                    marked += 1
++                    index += 1
++                    continue
++                # Naked marker: consume following JSON-shaped payload lines so a
++                # multi-line fabricated result is removed WHOLE (M2).
++                index += 1
++                while index < len(lines) and _PAYLOAD_LINE_RE.search(lines[index]):
++                    index += 1
 +                out.append(_REMOVED_TOOL_CLAIM_NOTE)
 +                removed += 1
++                continue
++            # Prefix stripped but no claim inside: plain prose line mentioning a
++            # marker shape mid-sentence — keep untouched.
++            out.append(lines[index])
++            index += 1
 +        else:
 +            out.append(lines[index])
 +            index += 1
@@ -387,7 +430,7 @@ index ce2e2bd5c..47d8806e1 100644
  def _sum_reference_accounting(outputs: list[tuple[str, str, Any]]) -> tuple[Any, Any]:
      """Sum fan-out usage AND cost in dollars (each advisor priced at its OWN rate)."""
      usage = CanonicalUsage()
-@@ -776,6 +919,42 @@ def _guidance_inputs(
+@@ -776,6 +962,42 @@ def _guidance_inputs(
      return agg_refs, _degraded_notice(failed_labels, policy), bool(reference_outputs) and not successful
  
  
@@ -430,17 +473,23 @@ index ce2e2bd5c..47d8806e1 100644
  def aggregate_moa_context(
      *, user_prompt: str, api_messages: list[dict[str, Any]], reference_models: list[dict[str, Any]],
      aggregator: dict[str, Any], temperature: float | None = None, aggregator_temperature: float | None = None,
-@@ -806,6 +985,9 @@ def aggregate_moa_context(
+@@ -806,6 +1028,15 @@ def aggregate_moa_context(
      except Exception:  # pragma: no cover - privacy filter must never break a turn
          logger.debug("MoA privacy filter check failed", exc_info=True)
      agg_refs, degraded, all_failed = _guidance_inputs(reference_outputs, privacy_full, degraded_reference_policy)
 +    # Defense-in-depth: strip fabricated tool blocks the advisors were told not to
 +    # emit (the Provenance contract is prompt-only enforcement; this is the filter).
-+    agg_refs, _scrub_removed, _scrub_marked = _scrub_reference_outputs(agg_refs, api_messages)
++    # Quote source = the advisory view the advisors actually saw (_reference_messages),
++    # NOT the raw transcript: the rendered '[tool result: ...]' previews exist only
++    # there, so honest verbatim quotes would fail the substring check against raw
++    # messages and be cut instead of marked (M3).
++    agg_refs, _scrub_removed, _scrub_marked = _scrub_reference_outputs(
++        agg_refs, _reference_messages(api_messages)
++    )
      joined = _join_reference_outputs(agg_refs, degraded)
      if all_failed:
          # Skip the aggregator: synthesizing over nothing can block for the full provider timeout.
-@@ -943,6 +1125,14 @@ class MoAChatCompletions:
+@@ -943,6 +1174,14 @@ class MoAChatCompletions:
          self.preset_name = preset_name or "default"
          self.reference_callback = reference_callback
          self._agent = agent
@@ -455,7 +504,7 @@ index ce2e2bd5c..47d8806e1 100644
          # Reference cache keyed on the advisory-view signature (HIT = no re-run, no re-emit).
          self._ref_cache_key: tuple | None = None
          self._ref_cache_outputs: list[tuple[str, str, Any]] = []
-@@ -1016,6 +1206,7 @@ class MoAChatCompletions:
+@@ -1016,6 +1255,7 @@ class MoAChatCompletions:
                  aggregator_provider=agg_slot.get("provider"), aggregator_temperature=pending.get("aggregator_temperature"),
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output, aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -463,7 +512,7 @@ index ce2e2bd5c..47d8806e1 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1028,10 +1219,10 @@ class MoAChatCompletions:
+@@ -1028,10 +1268,10 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -476,7 +525,7 @@ index ce2e2bd5c..47d8806e1 100644
  
      def rebase_prepared_request(self, prepared: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
          """Re-attach already-generated guidance to a rebuilt (compressed) transcript."""
-@@ -1039,6 +1230,7 @@ class MoAChatCompletions:
+@@ -1039,6 +1279,7 @@ class MoAChatCompletions:
          agg_messages = [dict(message) for message in messages]
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
@@ -484,7 +533,7 @@ index ce2e2bd5c..47d8806e1 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1191,12 +1383,18 @@ class MoAChatCompletions:
+@@ -1191,12 +1432,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -505,7 +554,7 @@ index ce2e2bd5c..47d8806e1 100644
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1205,6 +1403,10 @@ class MoAChatCompletions:
+@@ -1205,6 +1452,10 @@ class MoAChatCompletions:
          # An interrupted fan-out is a partial snapshot: never cache it (a HIT would
          # replay placeholder notes every iteration).
          interrupted = any(text == _INTERRUPTED_REFERENCE_NOTE for _lbl, text, _acct in reference_outputs)
@@ -516,7 +565,7 @@ index ce2e2bd5c..47d8806e1 100644
          self._ref_cache_key = None if interrupted else cache_key
          self._ref_cache_outputs = [] if interrupted else list(reference_outputs)
          # Fold advisor spend into accounting exactly once per turn.
-@@ -1216,9 +1418,12 @@ class MoAChatCompletions:
+@@ -1216,9 +1467,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -530,7 +579,7 @@ index ce2e2bd5c..47d8806e1 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1274,6 +1479,9 @@ class MoAChatCompletions:
+@@ -1274,6 +1528,9 @@ class MoAChatCompletions:
                  f"References: {', '.join(label for label, _, _ in agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
                  "answer the user directly or call tools as needed.\n\n"
@@ -540,7 +589,7 @@ index ce2e2bd5c..47d8806e1 100644
                  f"{_join_reference_outputs(agg_refs, degraded)}"
              )
          return None
-@@ -1289,6 +1497,111 @@ class MoAChatCompletions:
+@@ -1289,6 +1546,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -652,7 +701,7 @@ index ce2e2bd5c..47d8806e1 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1320,6 +1633,12 @@ class MoAChatCompletions:
+@@ -1320,6 +1682,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -665,7 +714,7 @@ index ce2e2bd5c..47d8806e1 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1355,6 +1674,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1355,6 +1723,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -1071,10 +1120,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..316a4496b
+index 000000000..4a44f2ecc
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,823 @@
+@@ -0,0 +1,973 @@
 +from __future__ import annotations
 +
 +import json
@@ -1898,6 +1947,156 @@ index 000000000..316a4496b
 +    assert "[called tool:" not in synth_prompt
 +    assert "[removed unverified tool-output claim]" in synth_prompt
 +    assert "[called tool:" not in context
++
++
++# ---- Post-review regression battery (M1/M2/M3 + detector FP fixes) ----
++
++
++def test_scrub_cuts_fabrication_under_verified_heading():
++    """M1: 'VERIFIED: [tool result] ...' must be caught — the Provenance contract
++    directs quotes under VERIFIED:, so the prefix must not mask the filter."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    scrubbed, removed, marked = _scrub_unverified_tool_claims(
++        'VERIFIED: [tool result]: {"output": "200 OK"}\nСовет.',
++        "совершенно другой контекст",
++    )
++    assert removed == 1 and marked == 0
++    assert '"200 OK"' not in scrubbed
++
++
++def test_scrub_marks_honest_quote_under_verified_heading():
++    """M1 (quoted branch): an honest quote under VERIFIED: is marked, not cut."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    ctx = 'лог хода: [tool result]: {"output": "ok"} конец'
++    scrubbed, removed, marked = _scrub_unverified_tool_claims(
++        'VERIFIED: [tool result]: {"output": "ok"}\nINFERRED: дело в кэше.', ctx
++    )
++    assert removed == 0 and marked == 1
++    assert "[UNVERIFIED-CLAIM" in scrubbed
++    assert '[tool result]: {"output": "ok"}' in scrubbed
++
++
++def test_scrub_cuts_bullet_prefixed_fabrication():
++    """M1: '- [called tool: ...]' markdown-bullet prefix must not mask the filter."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    scrubbed, removed, _ = _scrub_unverified_tool_claims(
++        '- [called tool: terminal({"command":"ls"})]\nДальше действуй.',
++        "другой контекст",
++    )
++    assert removed == 1
++    assert '"ls"' not in scrubbed
++
++
++def test_scrub_removes_multiline_payload_after_naked_marker():
++    """M2: a naked marker consumes following JSON-shaped payload lines WHOLE."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    scrubbed, removed, _ = _scrub_unverified_tool_claims(
++        '[tool result]\n{"output": "all good",\n "duration_ms": 42}\nСовет.',
++        "другой контекст",
++    )
++    assert removed == 1
++    assert '"all good"' not in scrubbed
++    assert '"duration_ms"' not in scrubbed
++    assert "Совет." in scrubbed
++
++
++def test_scrub_keeps_prose_after_payload_block():
++    """M2 boundary: legit prose after the consumed payload block is untouched."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    scrubbed, removed, _ = _scrub_unverified_tool_claims(
++        '[tool result]\n{"a": 1}\nПорт 3001 слушается — проверь.',
++        "другой контекст",
++    )
++    assert removed == 1
++    assert "Порт 3001 слушается" in scrubbed
++
++
++def test_scrub_keeps_container_tag_prose_cuts_id_echo():
++    """m2: containerTag with a multi-word value is prose (kept); the fabricated
++    single-token echo (containerTag: user_freebuff) is still cut."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    prose, rm_p, _ = _scrub_unverified_tool_claims(
++        "containerTag: проверь написание поля.", "другой контекст"
++    )
++    assert rm_p == 0
++    assert "containerTag" in prose
++
++    echo, rm_e, _ = _scrub_unverified_tool_claims(
++        "containerTag: user_freebuff", "другой контекст"
++    )
++    assert rm_e == 1
++
++
++def test_scrub_keeps_prose_mentioning_exit_code_cuts_bare_json():
++    """m1 family: prose mentioning '"exit_code":' mid-sentence is kept; a bare
++    fabricated JSON result object line starting with exit_code is cut."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    prose, rm_p, _ = _scrub_unverified_tool_claims(
++        'Схема имеет поле "exit_code": integer — валидируй.', "другой контекст"
++    )
++    assert rm_p == 0
++    assert "exit_code" in prose
++
++    obj, rm_o, _ = _scrub_unverified_tool_claims(
++        '{"exit_code": 0, "output": "fine"}', "другой контекст"
++    )
++    assert rm_o == 1
++    assert '"fine"' not in obj
++
++
++def test_oneshot_scrub_quote_source_is_advisory_view(monkeypatch):
++    """M3: one-shot scrub must quote-check against the advisory view (the rendered
++    '[tool result: ...]' previews exist only there), not the raw transcript."""
++    import agent.moa_loop as ml
++
++    captured = {}
++
++    def fake_call_llm(**kwargs):
++        if kwargs["task"] == "moa_reference":
++            return _response('Совет.\n[tool result]: {"output": "ok"}\nПовторяю.')
++        if kwargs["task"] == "moa_aggregator":
++            captured["messages"] = kwargs["messages"]
++            return _response("acted")
++        raise AssertionError(f"unexpected task: {kwargs.get('task')}")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++    # Network-independence: unknown provider short-circuits context-length probing.
++    monkeypatch.setattr(
++        "agent.moa_loop._reference_context_length", lambda *a, **k: 100_000
++    )
++
++    # Real tool result in the transcript -> the advisory view renders
++    # '[tool result: {"output": "ok"}]', which the advisor quotes verbatim.
++    api_messages = [
++        {"role": "user", "content": "вопрос"},
++        {
++            "role": "assistant",
++            "content": None,
++            "tool_calls": [
++                {"id": "t1", "type": "function",
++                 "function": {"name": "terminal", "arguments": '{"command":"ls"}'}}
++            ],
++        },
++        {"role": "tool", "tool_call_id": "t1", "content": '{"output": "ok"}'},
++    ]
++    ml.aggregate_moa_context(
++        user_prompt="вопрос",
++        api_messages=api_messages,
++        reference_models=[{"provider": "test", "model": "probe-ref"}],
++        aggregator={"provider": "test", "model": "probe-agg"},
++    )
++
++    guidance = captured["messages"][-1]["content"]
++    # The rendered advisory preview IS quoted verbatim -> must be marked, not cut.
++    assert "[UNVERIFIED-CLAIM" in guidance
++    assert "[removed unverified tool-output claim]" not in guidance
 diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
 new file mode 100644
 index 000000000..8781db710

@@ -227,3 +227,23 @@ moa:
   default_preset: default
   save_traces: true
   privacy_filter: full
+
+  # Per-profile deviations from the canonical graph above (merged by tools/moa_sync.py).
+  # mxstat is a QA-verification profile: Tracker task titles say "Реализовать...", so
+  # advisors with fanout=user_turn froze a "write code" frame for whole sessions
+  # (NEWLOG-704, 2026-09-10). every_n:3 lets advisors re-read accumulated context.
+  profile_overrides:
+    mxstat:
+      presets:
+        pay_default:
+          fanout: every_n:3
+        pay_code_logic_deep:
+          fanout: every_n:3
+        pay_logic_deep:
+          fanout: every_n:3
+        pay_code_visual_deep:
+          fanout: every_n:3
+        pay_logic_visual_deep:
+          fanout: every_n:3
+        pay_auto_moa:
+          fanout: every_n:3

@@ -115,18 +115,38 @@ def semantic_checks(name: str, data: dict[str, Any]) -> list[str]:
     return errors
 
 
-def merged_moa(data: dict[str, Any], canonical_moa: dict[str, Any]) -> dict[str, Any]:
-    """Build the exact canonical MoA section with a profile-specific default."""
+def merged_moa(
+    data: dict[str, Any], canonical_moa: dict[str, Any], profile_name: str = "",
+) -> dict[str, Any]:
+    """Build the canonical MoA section with a profile-specific default and any
+    per-profile overrides declared in the canonical's ``profile_overrides``."""
     current = data.get("moa") or {}
     result = copy.deepcopy(canonical_moa)
     result["default_preset"] = current.get("default_preset") or "free_auto_moa"
+    overrides = (result.pop("profile_overrides", None) or {}).get(profile_name)
+    if isinstance(overrides, dict):
+        for key, value in overrides.items():
+            if key == "presets" and isinstance(value, dict):
+                target = result.setdefault("presets", {})
+                for preset_name, patch in value.items():
+                    if isinstance(patch, dict) and isinstance(target.get(preset_name), dict):
+                        target[preset_name].update(copy.deepcopy(patch))
+            else:
+                result[key] = copy.deepcopy(value)
     return result
 
 
-def needs_sync(data: dict[str, Any], canonical_moa: dict[str, Any]) -> bool:
-    """Detect graph drift, including stale legacy top-level MoA keys."""
-    desired = merged_moa(data, canonical_moa)
-    return _normalize(data.get("moa") or {}) != _normalize(desired)
+def needs_sync(
+    data: dict[str, Any], desired_moa: dict[str, Any], profile_name: str = "",
+) -> bool:
+    """Detect graph drift, including stale legacy top-level MoA keys.
+
+    ``desired_moa`` is the PRE-MERGED canonical (merged_moa output); the legacy
+    two-arg call style (canonical + profile name) is still accepted.
+    """
+    if profile_name:
+        desired_moa = merged_moa(data, desired_moa, profile_name)
+    return _normalize(data.get("moa") or {}) != _normalize(desired_moa)
 
 
 def catalog_models() -> set[str] | None:
@@ -204,7 +224,9 @@ def main() -> int:
     canonical = load_yaml(canonical_path)
     if not isinstance(canonical.get("moa"), dict):
         raise ValueError(f"{canonical_path}: missing top-level moa mapping")
-    canonical_moa = graph(canonical)
+    # Pass the FULL moa section (incl. profile_overrides) so merged_moa can apply
+    # per-profile deviations; graph() alone drops profile_overrides.
+    canonical_moa = canonical["moa"]
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     loaded: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
@@ -235,8 +257,8 @@ def main() -> int:
     all_ok = True
     for name, path in PROFILE_PATHS.items():
         data = loaded[name]
-        graph_same = profile_graph(data) == canonical_moa
-        exact_same = not needs_sync(data, canonical_moa)
+        desired = merged_moa(data, canonical_moa, profile_name=name)
+        exact_same = not needs_sync(data, desired)
         errors = semantic_checks(name, data)
         if catalog is not None:
             for missing in sorted(configured_models(data) - catalog):
@@ -244,15 +266,15 @@ def main() -> int:
         if not exact_same:
             changed += 1
         if args.sync and (not exact_same or errors):
-            data["moa"] = merged_moa(data, canonical_moa)
+            data["moa"] = desired
             atomic_write(path, dump_yaml(data))
             data = load_yaml(path)
             errors = semantic_checks(name, data)
             if catalog is not None:
                 for missing in sorted(configured_models(data) - catalog):
                     errors.append(f"model not in provider catalog: {missing}")
-            graph_same = profile_graph(data) == canonical_moa
-            exact_same = not needs_sync(data, canonical_moa)
+            desired = merged_moa(data, canonical_moa, profile_name=name)
+            exact_same = not needs_sync(data, desired)
         if errors or not exact_same:
             all_ok = False
         status = "OK" if exact_same and not errors else "DRIFT"
