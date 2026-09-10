@@ -102,11 +102,12 @@ recovery-проекте, поэтому не затирается при `reset 
 | `install-auto-moa.bat` | Установщик: патч + hook + watchdog + cronjob. |
 | `restore-auto-moa-after-update.bat` | Идемпотентное восстановление (config check, focused tests, UI builds). |
 | `auto-moa-router-source-20260820.patch` | Legacy source patch для совместимых старых деревьев. |
-| `auto-moa-moa-section.yaml` | Backup двенадцати MoA presets и `auto_route` graph. |
+| `auto-moa-moa-section.yaml` | Канонический граф MoA: 12 presets + `auto_route` + `profile_overrides`; источник истины и база для `tools/moa_sync.py --check/--sync`. Осторожно: `--sync` пересобирает ВЕСЬ config через PyYAML и теряет комментарии. |
 | `check-moa-models.py` / `.bat` | Мониторинг живости моделей схемы (free+pay тиры, без API-ключа) + статус гейта `paid_access` + новые free-модели каталога. |
 | `rotate-moa-model.py` / `.bat` | Ротация выпавшей модели во всех конфигах: `rotate-moa-model.bat <dead> <replacement>`. |
 | `SHA256SUMS.txt` | Контроль целостности recovery-артефактов. |
 | `tools/live_tree_check.py` | Гейт чистоты live-дерева: вне 9 файлов патча грязи быть не должно (`--check` только отчёт; `--fix` откатывает ТРЕКНУТЫЙ шум через `git checkout`, untracked только показывает, не удаляет). |
+| `tools/moa_preset_audit_apply.py` | Идемпотентный применитель аудита пресетов (F1–F6) в канон + 6 live-конфигов: правит только строки внутри `moa:`-блока, комментарии и форматирование сохраняет (`--dry-run` / `--apply`). |
 | `run-moa-tests.bat` | Focused MoA-pytest со свежим `--basetemp` на прогон (обход WinError 5 в shared pytest-temp; чужой `pytest-of-tiki` не трогает). |
 | `USER_GUIDE_RU.txt` | Подробная русская инструкция. |
 
@@ -118,11 +119,14 @@ Free-модели Nous — ротация промо, не контракт: `te
 
 | Пресет | Агрегатор | Падение модели → сломано пресетов |
 |---|---|---|
-| `default`, `logic_deep` | `meituan/longcat-2.0:free` | longcat умрёт → 2 |
-| `code_logic_deep` | `poolside/laguna-s-2.1:free` | laguna-s умрёт → 1 |
+| `default`, `logic_deep`, `code_logic_deep` | `meituan/longcat-2.0:free` | longcat умрёт → 3 |
 | `code_visual_deep`, `logic_visual_deep` | `stepfun/step-3.7-flash:free` | step умрёт → 2 |
 
-Референсы деградируют мягко (turn не роняется): laguna-xs, ling-3.0-flash-fin/sante, laguna-s-2.1. Слабейшая по живому пробингу (07.09: 4 токена, неверный ответ, 0 reasoning) `upstage/solar-pro4:free` заменена на `inclusionai/ling-3.0-flash-sante:free`; каталог всех моделей конфига сверяется с провайдером через `tools/moa_sync.py --check --catalog`.
+Аудит 10.09.2026 свёл `code_logic_deep` к каноническому free-агрегатору (раньше он один держал `laguna-s-2.1`), поэтому распределение стало 3/2 вместо 2/1/2: концентрация на longcat выросла. Если важнее разнести единую точку отказа, верните `code_logic_deep` отдельный агрегатор — ценой того, что free-роутер снова будет давать на code-ходы не тот агрегатор, что у `free_auto_moa`.
+
+Референсы деградируют мягко (turn не роняется): laguna-xs, ling-3.0-flash-fin, laguna-s-2.1, stepfun/step-3.7-flash. Слабейшая по живому пробингу (07.09: 4 токена, неверный ответ, 0 reasoning) `upstage/solar-pro4:free` была заменена на `inclusionai/ling-3.0-flash-sante:free`, а 10.09.2026 sante убрана из дефолтного пула: три советника теперь из разных семейств (`inclusionai` + `poolside` + `stepfun`), а не два варианта одной `ling-3.0-flash`. Каталог всех моделей конфига сверяется с провайдером через `tools/moa_sync.py --check --catalog`.
+
+Аудит пресетов 10.09.2026 (`tools/moa_preset_audit_apply.py`): убран ключ `max_tokens` — его не читает `_normalize_preset` (распознаётся только `reference_max_tokens`), поэтому агрегатор на самом деле никогда не был ограничен по выводу; на free-пресетах задан `reference_timeout: 240` вместо наследуемых `auxiliary.moa_reference.timeout` = 900 с (свободный flash-советник мог держать ход 15 минут); `degraded_reference_policy: loud` прописан явно. `fanout` намеренно не трогали: `every_n:3` остаётся только у mxstat через `profile_overrides` (NEWLOG-704).
 
 ### Мониторинг и ротация
 

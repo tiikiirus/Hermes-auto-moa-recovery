@@ -1,3 +1,4 @@
 *.before-auto-moa-restore.bak
 *.log
 __pycache__/
+.freebuff/
