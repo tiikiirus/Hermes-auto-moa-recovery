@@ -1,0 +1,66 @@
+# Registry of expected profile overrides — explicit source for cross-profile drift.
+#
+# Why this exists (auditor clarification 1): cross-profile check compares
+#   profile  vs  canon + registry.
+# But who checks that the registry itself matches the actual section
+#   profile_overrides in auto-moa-moa-section.yaml?
+# Answer: registry_vs_canon check (second level). Every entry here must be
+# reflected verbatim in the canon, and every override in the canon must have
+# an entry here — otherwise the registry is just stale docs.
+#
+# Why status: canary vs active (clarification 2): registry + canon change
+# must be ONE commit. A provisional canary overrides still gets a registry
+# entry with status: canary so cross-check sees a coherent state, not
+# "unexplained drift". Promote to active after the canary period.
+#
+# Record shape: profile, preset, key, value, status, justification
+# status: active | canary
+registry:
+  - profile: mxstat
+    preset: pay_default
+    key: fanout
+    value: every_n:3
+    status: active
+    justification: "NEWLOG-704 — Tracker titles freeze user_turn frame on QA tasks; every_n:3 re-reads context"
+  - profile: mxstat
+    preset: pay_code_logic_deep
+    key: fanout
+    value: every_n:3
+    status: active
+    justification: "NEWLOG-704 — same shape, pay path"
+  - profile: mxstat
+    preset: pay_logic_deep
+    key: fanout
+    value: every_n:3
+    status: active
+    justification: "NEWLOG-704 — same shape, pay path"
+  - profile: mxstat
+    preset: pay_code_visual_deep
+    key: fanout
+    value: every_n:3
+    status: active
+    justification: "NEWLOG-704 — same shape, pay path"
+  - profile: mxstat
+    preset: pay_logic_visual_deep
+    key: fanout
+    value: every_n:3
+    status: active
+    justification: "NEWLOG-704 — same shape, pay path"
+  - profile: mxstat
+    preset: pay_auto_moa
+    key: fanout
+    value: every_n:3
+    status: active
+    justification: "NEWLOG-704 — same shape, pay path (router preset)"
+  - profile: fantrax
+    preset: default
+    key: fanout
+    value: every_n:3
+    status: canary
+    justification: "Canary 2/6 — default is explicit user choice path; validates cadence at minimal blast radius"
+  - profile: fantrax
+    preset: free_auto_moa
+    key: fanout
+    value: every_n:3
+    status: canary
+    justification: "Canary 2/6 — free_auto_moa is router sink for undifferentiated traffic (worst-case fan-out volume)"

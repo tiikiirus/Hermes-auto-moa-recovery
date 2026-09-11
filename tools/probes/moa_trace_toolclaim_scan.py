@@ -7,7 +7,14 @@ For every record it walks ``references[].output`` and counts lines that start
 with the tool-echo markers the anti-fabrication scrubber targets
 (``[called tool:`` / ``[tool result:``), grouped by advisor model family, and
 reports whether the aggregator guidance header carrying the
-unverified-advisor note is present. Writes nothing.
+unverified-advisor note is present.
+
+It also reports **phase-2 trace-field coverage**: how many slots carry the
+``guidance_output`` (what the aggregator actually saw) and ``scrub``
+``{removed, marked}`` fields that ``agent/moa_trace._slot_trace`` writes, plus
+whether guidance differs from the raw ``output``. Traces written before the
+patch lack those keys entirely, so a fresh trace must show zero legacy slots.
+Writes nothing.
 """
 from __future__ import annotations
 
@@ -44,6 +51,13 @@ def main(path: str) -> int:
     output_lines: collections.Counter[str] = collections.Counter()
     guidance_records = 0
     examples: list[str] = []
+    slots = 0
+    slots_with_guidance = 0
+    slots_with_scrub_counts = 0
+    slots_guidance_differs = 0
+    slots_missing_fields = 0
+    scrub_removed = 0
+    scrub_marked = 0
 
     with open(path, encoding="utf-8", errors="replace") as fh:
         for raw in fh:
@@ -59,9 +73,26 @@ def main(path: str) -> int:
             blob_parts: list[str] = []
             for ref in rec.get("references") or []:
                 total_refs += 1
+                slots += 1
                 model = ref.get("model")
                 fam = family_of(model)
                 model_counts[f"{fam}: {model}"] += 1
+                # phase-2 fields: guidance_output (aggregator-facing text) + per-advisor
+                # scrub counts. Absent keys mean a pre-patch writer produced this line.
+                if "guidance_output" in ref and "scrub" in ref:
+                    if ref.get("guidance_output") is not None:
+                        slots_with_guidance += 1
+                    scrub = ref.get("scrub") or {}
+                    removed = scrub.get("removed")
+                    marked = scrub.get("marked")
+                    if removed or marked:
+                        slots_with_scrub_counts += 1
+                    scrub_removed += removed or 0
+                    scrub_marked += marked or 0
+                    if isinstance(ref.get("output"), str) and ref.get("output") != ref.get("guidance_output"):
+                        slots_guidance_differs += 1
+                else:
+                    slots_missing_fields += 1
                 out = ref.get("output")
                 if not isinstance(out, str):
                     continue
@@ -99,6 +130,13 @@ def main(path: str) -> int:
         print(f"  {fam}: {loose.get(fam, 0)}")
     print(f"  TOTAL loose: {sum(loose.values())}")
     print(f"guidance_records_with_note: {guidance_records}/{records}")
+    print("trace field coverage (phase-2 writer):")
+    print(f"  reference_slots                 : {slots}")
+    print(f"  slots_with_guidance_output      : {slots_with_guidance}")
+    print(f"  slots_with_scrub_counts(>0)     : {slots_with_scrub_counts}")
+    print(f"  slots_guidance_differs_from_raw : {slots_guidance_differs}")
+    print(f"  slots_missing_phase2_fields     : {slots_missing_fields}  (pre-patch writer if > 0)")
+    print(f"  scrub_removed_total / marked    : {scrub_removed} / {scrub_marked}")
     for ex in examples:
         print(f"  example: {ex}")
     return 0

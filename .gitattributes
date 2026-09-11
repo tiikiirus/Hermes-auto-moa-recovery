@@ -18,6 +18,7 @@ tools/live_tree_check.py text eol=lf
 tools/moa_preset_audit_apply.py text eol=lf
 tools/probes/moa_trace_toolclaim_scan.py text eol=lf
 tools/probes/moa_scrub_outcome_correlation.py text eol=lf
+tools/probes/moa_fanout_spend_projection.py text eol=lf
 tools/tests/test_moa_sync_splice.py text eol=lf
 
 # Documentation stays normalized.
