@@ -39,11 +39,15 @@ def git(*args: str, cwd: Path | None = None) -> GitResult:
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60,
         )
-    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:  # pragma: no cover
         return GitResult(rc=127, stderr=str(exc))
-    return GitResult(proc.returncode, proc.stdout, proc.stderr)
+    except Exception as exc:  # pragma: no cover — decode or other
+        return GitResult(rc=127, stderr=str(exc))
+    return GitResult(proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
 # ── Findings / Report ─────────────────────────────────────────────────
@@ -288,6 +292,38 @@ def _verify_patch(repo: Path, live: Path, patch: Path | None = None) -> list[Fin
                 f"patch applies only with fuzz: {(res.stderr or res.stdout).strip()[:500]}",
             )
         ]
+    # Stricter (R4): even when reverse-check succeeds, a patch that is not
+    # byte-exact vs the live diff is drift. This catches offset/fuzzy cases
+    # where git finds context at a different line and succeeds with "offset"
+    # (no warning unless --verbose) but the live tree still carries unrelated
+    # edits (e.g. an extra line far from the hunk) that a byte-exact export
+    # would include. The live diff is the source of truth.
+    try:
+        fresh_res = git("diff", "--", *paths(), cwd=live)
+        if fresh_res.rc == 0:
+            fresh_text = fresh_res.stdout or ""
+            if not fresh_text.strip():
+                alt = git("diff", "HEAD", "--", *paths(), cwd=live)
+                if alt.rc == 0 and alt.stdout and alt.stdout.strip():
+                    fresh_text = alt.stdout
+            stored_text = patch.read_text(encoding="utf-8", errors="ignore")
+
+            def _norm(s: str) -> str:
+                return s.replace("\r\n", "\n").strip()
+
+            if _norm(fresh_text) != _norm(stored_text):
+                # Both empty => no drift; otherwise byte mismatch => drift
+                if _norm(fresh_text) or _norm(stored_text):
+                    return [
+                        Finding(
+                            "patch_drift",
+                            "block",
+                            str(patch),
+                            "patch not byte-exact vs live diff (re-export differs)",
+                        )
+                    ]
+    except Exception:
+        pass
     return []
 
 
@@ -363,6 +399,44 @@ _PATCH_SCOPE: tuple[str, ...] = (
     "tests/agent/test_moa_auto_runtime.py",
     "tests/hermes_cli/test_moa_cmd_auto.py",
 )
+
+
+def export_patch(live: Path, repo: Path, patch: Path | None = None) -> Path:
+    """Re-export the recovery patch from the live tree's current diff.
+
+    Runs ``git diff -- <paths>`` on *live* and writes the result to *patch*
+    (default ``repo/auto-moa-current.patch``). The diff is byte-exact vs
+    upstream HEAD for the nine scoped paths — the live tree's working state
+    is the source of truth (CONTEXT: live tree diff is the patch source).
+    Returns the patch Path written.
+
+    This is the R4 writer; verify() stays read-only and never calls it.
+    """
+    live = Path(live)
+    repo = Path(repo)
+    if patch is None:
+        patch = repo / "auto-moa-current.patch"
+    else:
+        patch = Path(patch)
+    # git diff on the nine paths; without HEAD, unstaged vs index is the
+    # working diff we need (index is clean in normal live use). Use HEAD
+    # fallback if the plain diff is empty but HEAD diff is not (edge of
+    # staged changes). The seam returns rc 0 even with a diff.
+    res = git("diff", "--", *paths(), cwd=live)
+    if res.rc != 0:
+        # git not available or not a worktree — fail loud so caller can refuse
+        raise RuntimeError(f"git diff failed: {res.stderr or res.stdout}")
+    # If plain diff produced no output but HEAD diff does (staged case),
+    # prefer HEAD diff so the export is not silently empty.
+    stdout = res.stdout or ""
+    if not stdout.strip():
+        alt = git("diff", "HEAD", "--", *paths(), cwd=live)
+        if alt.rc == 0 and alt.stdout and alt.stdout.strip():
+            stdout = alt.stdout
+    # Write with LF as the patch canonical form (see Task 0)
+    patch.parent.mkdir(parents=True, exist_ok=True)
+    patch.write_text(stdout, encoding="utf-8", newline="\n")
+    return patch
 
 
 def paths() -> tuple[str, ...]:
