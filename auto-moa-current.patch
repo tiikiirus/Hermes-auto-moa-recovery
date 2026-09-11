@@ -1214,10 +1214,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..fc9d95c2c
+index 000000000..5a3d7b162
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,1053 @@
+@@ -0,0 +1,1104 @@
 +from __future__ import annotations
 +
 +import json
@@ -2271,6 +2271,57 @@ index 000000000..fc9d95c2c
 +    trace = _slot_trace(acct, "nous:test/free")
 +    assert trace["guidance_output"] is None
 +    assert trace["scrub"] == {"removed": None, "marked": None}
++
++
++def test_loop_persists_trace_with_guidance_output_and_scrub_counts(tmp_path, monkeypatch):
++    """End-to-end: a fabricating advisor must leave, in the PERSISTED trace, both the
++    raw output (forensics) and the scrubbed guidance the aggregator actually saw, plus
++    the per-advisor counts that make the intervention auditable from the trace alone."""
++    import json
++
++    home = tmp_path / ".hermes"
++    home.mkdir()
++    traces = home / "moa-traces"
++    (home / "config.yaml").write_text(
++        """
++moa:
++  save_traces: true
++  default_preset: default
++  presets:
++    default:
++      reference_models:
++        - provider: test
++          model: fabricated-ref
++      aggregator:
++        provider: test
++        model: capped-agg
++""".strip(),
++        encoding="utf-8",
++    )
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    def fake_call_llm(**kwargs):
++        return _response(_FABRICATED_ECHO if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    from agent.moa_loop import MoAChatCompletions
++
++    completions = MoAChatCompletions("default")
++    completions.create(model="default", messages=[{"role": "user", "content": "обычный вопрос"}])
++    completions.consume_and_save_trace("trace-fields-test")
++
++    written = list(traces.glob("*.jsonl"))
++    assert written, "no trace file was persisted"
++    record = json.loads(written[0].read_text(encoding="utf-8").splitlines()[-1])
++    ref = record["references"][0]
++
++    assert "[called tool:" in ref["output"], "raw advisor output must stay in the trace"
++    guidance = ref["guidance_output"]
++    assert "[called tool:" not in guidance
++    assert "[removed unverified tool-output claim]" in guidance
++    assert ref["scrub"]["removed"] >= 1
++    assert ref["scrub"]["marked"] == 0
 diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
 new file mode 100644
 index 000000000..8781db710
