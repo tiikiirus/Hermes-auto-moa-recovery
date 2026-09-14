@@ -1,0 +1,11 @@
+name: hermes-automoa
+version: 0.1.0-spike
+description: >-
+  SPIKE — do not install. Auto-MoA (anti-fabrication scrubber, provenance
+  quote schema, auto-router) expressed as a Hermes plugin. Only the CLI slice
+  works today; the rest is blocked on generic hook widenings W1/W2/W3.
+  See docs/superpowers/plans/2026-09-11-moa-plugin-spike.md.
+author: "Hermes-auto-moa-recovery spike"
+hooks:
+  - post_llm_call
+  - pre_llm_call
