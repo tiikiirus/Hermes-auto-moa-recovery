@@ -220,10 +220,10 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index ce2e2bd5c..f56585b98 100644
+index d0f9a05db..fbfa65a95 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
-@@ -119,6 +119,82 @@ _preset_cache_lock = threading.Lock()
+@@ -119,6 +119,80 @@ _preset_cache_lock = threading.Lock()
  _preset_cache: dict[tuple, Any] = {}
  
  
@@ -301,12 +301,10 @@ index ce2e2bd5c..f56585b98 100644
 +        ]
 +        return
 +    messages.append({"role": "user", "content": parts})
-+
-+
  def _resolve_preset_cached(preset_name: str) -> tuple[dict[str, Any], Any]:
-     """``(preset, raw moa config)``; the resolved preset is cached per config mtime
+     """``(preset, raw moa config)``; the resolved preset is cached per config file signature
      (skips resolve_moa_preset's full validation of the moa block on every create())."""
-@@ -167,6 +243,11 @@ class _RefAccounting:
+@@ -168,6 +242,11 @@ class _RefAccounting:
      _: KW_ONLY
      messages: Any = None
      output: str | None = None
@@ -318,7 +316,7 @@ index ce2e2bd5c..f56585b98 100644
      model: str | None = None
      provider: str | None = None
      temperature: Any = None
-@@ -207,6 +288,17 @@ _REFERENCE_SYSTEM_PROMPT = (
+@@ -208,6 +287,17 @@ _REFERENCE_SYSTEM_PROMPT = (
      "tools or access. Your response is private guidance handed to the "
      "aggregator, not an answer shown to the user. NEVER claim to have executed "
      "anything."
@@ -336,7 +334,7 @@ index ce2e2bd5c..f56585b98 100644
  )
  
  
-@@ -739,6 +831,141 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
+@@ -743,6 +833,141 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
      return joined
  
  
@@ -478,7 +476,7 @@ index ce2e2bd5c..f56585b98 100644
  def _sum_reference_accounting(outputs: list[tuple[str, str, Any]]) -> tuple[Any, Any]:
      """Sum fan-out usage AND cost in dollars (each advisor priced at its OWN rate)."""
      usage = CanonicalUsage()
-@@ -776,6 +1003,51 @@ def _guidance_inputs(
+@@ -780,6 +1005,51 @@ def _guidance_inputs(
      return agg_refs, _degraded_notice(failed_labels, policy), bool(reference_outputs) and not successful
  
  
@@ -530,7 +528,7 @@ index ce2e2bd5c..f56585b98 100644
  def aggregate_moa_context(
      *, user_prompt: str, api_messages: list[dict[str, Any]], reference_models: list[dict[str, Any]],
      aggregator: dict[str, Any], temperature: float | None = None, aggregator_temperature: float | None = None,
-@@ -806,6 +1078,15 @@ def aggregate_moa_context(
+@@ -810,6 +1080,15 @@ def aggregate_moa_context(
      except Exception:  # pragma: no cover - privacy filter must never break a turn
          logger.debug("MoA privacy filter check failed", exc_info=True)
      agg_refs, degraded, all_failed = _guidance_inputs(reference_outputs, privacy_full, degraded_reference_policy)
@@ -546,7 +544,7 @@ index ce2e2bd5c..f56585b98 100644
      joined = _join_reference_outputs(agg_refs, degraded)
      if all_failed:
          # Skip the aggregator: synthesizing over nothing can block for the full provider timeout.
-@@ -943,6 +1224,14 @@ class MoAChatCompletions:
+@@ -947,6 +1226,14 @@ class MoAChatCompletions:
          self.preset_name = preset_name or "default"
          self.reference_callback = reference_callback
          self._agent = agent
@@ -561,7 +559,7 @@ index ce2e2bd5c..f56585b98 100644
          # Reference cache keyed on the advisory-view signature (HIT = no re-run, no re-emit).
          self._ref_cache_key: tuple | None = None
          self._ref_cache_outputs: list[tuple[str, str, Any]] = []
-@@ -1016,6 +1305,7 @@ class MoAChatCompletions:
+@@ -1020,6 +1307,7 @@ class MoAChatCompletions:
                  aggregator_provider=agg_slot.get("provider"), aggregator_temperature=pending.get("aggregator_temperature"),
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output, aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -569,7 +567,7 @@ index ce2e2bd5c..f56585b98 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1028,10 +1318,10 @@ class MoAChatCompletions:
+@@ -1032,10 +1320,10 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -582,7 +580,7 @@ index ce2e2bd5c..f56585b98 100644
  
      def rebase_prepared_request(self, prepared: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
          """Re-attach already-generated guidance to a rebuilt (compressed) transcript."""
-@@ -1039,6 +1329,7 @@ class MoAChatCompletions:
+@@ -1043,6 +1331,7 @@ class MoAChatCompletions:
          agg_messages = [dict(message) for message in messages]
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
@@ -590,7 +588,7 @@ index ce2e2bd5c..f56585b98 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1191,12 +1482,18 @@ class MoAChatCompletions:
+@@ -1195,12 +1484,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -611,7 +609,7 @@ index ce2e2bd5c..f56585b98 100644
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1205,6 +1502,11 @@ class MoAChatCompletions:
+@@ -1209,6 +1504,11 @@ class MoAChatCompletions:
          # An interrupted fan-out is a partial snapshot: never cache it (a HIT would
          # replay placeholder notes every iteration).
          interrupted = any(text == _INTERRUPTED_REFERENCE_NOTE for _lbl, text, _acct in reference_outputs)
@@ -623,7 +621,7 @@ index ce2e2bd5c..f56585b98 100644
          self._ref_cache_key = None if interrupted else cache_key
          self._ref_cache_outputs = [] if interrupted else list(reference_outputs)
          # Fold advisor spend into accounting exactly once per turn.
-@@ -1216,9 +1518,12 @@ class MoAChatCompletions:
+@@ -1220,9 +1520,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -637,7 +635,7 @@ index ce2e2bd5c..f56585b98 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1274,6 +1579,9 @@ class MoAChatCompletions:
+@@ -1278,6 +1581,9 @@ class MoAChatCompletions:
                  f"References: {', '.join(label for label, _, _ in agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
                  "answer the user directly or call tools as needed.\n\n"
@@ -647,7 +645,7 @@ index ce2e2bd5c..f56585b98 100644
                  f"{_join_reference_outputs(agg_refs, degraded)}"
              )
          return None
-@@ -1289,6 +1597,111 @@ class MoAChatCompletions:
+@@ -1293,6 +1599,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -759,7 +757,7 @@ index ce2e2bd5c..f56585b98 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1320,6 +1733,12 @@ class MoAChatCompletions:
+@@ -1324,6 +1735,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -772,7 +770,7 @@ index ce2e2bd5c..f56585b98 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1355,6 +1774,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1359,6 +1776,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -902,7 +900,7 @@ index eb2939f62..9359166bc 100644
      if moa["default_preset"] == preset_name:
          moa["default_preset"] = next(iter(moa["presets"]))
 diff --git a/hermes_cli/moa_config.py b/hermes_cli/moa_config.py
-index 0c0c52892..ccedf1cc0 100644
+index 17ed12c6a..f3102820f 100644
 --- a/hermes_cli/moa_config.py
 +++ b/hermes_cli/moa_config.py
 @@ -11,6 +11,30 @@ from typing import Any
