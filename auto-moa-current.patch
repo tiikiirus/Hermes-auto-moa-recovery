@@ -220,7 +220,7 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index d0f9a05db..fbfa65a95 100644
+index d0f9a05db..2a5eb287b 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
 @@ -119,6 +119,80 @@ _preset_cache_lock = threading.Lock()
@@ -334,10 +334,16 @@ index d0f9a05db..fbfa65a95 100644
  )
  
  
-@@ -743,6 +833,141 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
+@@ -743,6 +833,162 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
      return joined
  
  
++# Opener/closer for the fabricated XML tool-call shape (<longcat_tool_call>,
++# <tool_call>). Kept as named patterns so the naked branch can consume a whole
++# block through its closing tag instead of relying on the JSON-shaped payload
++# rule (XML arg lines are not JSON).
++_TOOL_CALL_OPEN_RE = re.compile(r"^\s*<\w*tool_call\b[^>]*>", re.IGNORECASE)
++_TOOL_CALL_CLOSE_RE = re.compile(r"^\s*</\w*tool_call\s*>", re.IGNORECASE)
 +_TOOL_CLAIM_RES = (
 +    re.compile(r"^\s*\[called tool:", re.IGNORECASE),
 +    re.compile(r"^\s*\[tool result", re.IGNORECASE),
@@ -348,6 +354,10 @@ index d0f9a05db..fbfa65a95 100644
 +    re.compile(r"^\s*\"\s*exit_code\s*\"\s*:", re.IGNORECASE),
 +    # Fabricated bare JSON result object as a whole line ({"exit_code": 0, ...}).
 +    re.compile(r"^\s*\{\s*\"exit_code\"", re.IGNORECASE),
++    # Fabricated XML tool-call block opener. Advisors with native XML tool
++    # syntax echo fake calls; the arg/close lines are consumed as payload (M2)
++    # so a naked block is removed WHOLE.
++    _TOOL_CALL_OPEN_RE,
 +)
 +# Optional leading prose the Provenance contract itself induces: a quote under the
 +# VERIFIED: heading or a markdown bullet. Without stripping these prefixes a
@@ -450,10 +460,21 @@ index d0f9a05db..fbfa65a95 100644
 +                    marked += len(run)
 +                    continue
 +                # Naked marker: consume following JSON-shaped payload lines so a
-+                # multi-line fabricated result is removed WHOLE (M2).
++                # multi-line fabricated result is removed WHOLE (M2). A naked
++                # XML <*_tool_call> opener instead consumes through its closing
++                # tag (arg lines are XML, not JSON-shaped).
 +                index += 1
-+                while index < len(lines) and _PAYLOAD_LINE_RE.search(lines[index]):
-+                    index += 1
++                if _TOOL_CALL_OPEN_RE.search(stripped):
++                    while index < len(lines):
++                        if _TOOL_CALL_CLOSE_RE.search(lines[index]):
++                            index += 1
++                            break
++                        if not lines[index].lstrip().startswith("<"):
++                            break
++                        index += 1
++                else:
++                    while index < len(lines) and _PAYLOAD_LINE_RE.search(lines[index]):
++                        index += 1
 +                out.append(_REMOVED_TOOL_CLAIM_NOTE)
 +                removed += 1
 +                continue
@@ -476,7 +497,7 @@ index d0f9a05db..fbfa65a95 100644
  def _sum_reference_accounting(outputs: list[tuple[str, str, Any]]) -> tuple[Any, Any]:
      """Sum fan-out usage AND cost in dollars (each advisor priced at its OWN rate)."""
      usage = CanonicalUsage()
-@@ -780,6 +1005,51 @@ def _guidance_inputs(
+@@ -780,6 +1026,51 @@ def _guidance_inputs(
      return agg_refs, _degraded_notice(failed_labels, policy), bool(reference_outputs) and not successful
  
  
@@ -528,7 +549,7 @@ index d0f9a05db..fbfa65a95 100644
  def aggregate_moa_context(
      *, user_prompt: str, api_messages: list[dict[str, Any]], reference_models: list[dict[str, Any]],
      aggregator: dict[str, Any], temperature: float | None = None, aggregator_temperature: float | None = None,
-@@ -810,6 +1080,15 @@ def aggregate_moa_context(
+@@ -810,6 +1101,15 @@ def aggregate_moa_context(
      except Exception:  # pragma: no cover - privacy filter must never break a turn
          logger.debug("MoA privacy filter check failed", exc_info=True)
      agg_refs, degraded, all_failed = _guidance_inputs(reference_outputs, privacy_full, degraded_reference_policy)
@@ -544,7 +565,7 @@ index d0f9a05db..fbfa65a95 100644
      joined = _join_reference_outputs(agg_refs, degraded)
      if all_failed:
          # Skip the aggregator: synthesizing over nothing can block for the full provider timeout.
-@@ -947,6 +1226,14 @@ class MoAChatCompletions:
+@@ -947,6 +1247,14 @@ class MoAChatCompletions:
          self.preset_name = preset_name or "default"
          self.reference_callback = reference_callback
          self._agent = agent
@@ -559,7 +580,7 @@ index d0f9a05db..fbfa65a95 100644
          # Reference cache keyed on the advisory-view signature (HIT = no re-run, no re-emit).
          self._ref_cache_key: tuple | None = None
          self._ref_cache_outputs: list[tuple[str, str, Any]] = []
-@@ -1020,6 +1307,7 @@ class MoAChatCompletions:
+@@ -1020,6 +1328,7 @@ class MoAChatCompletions:
                  aggregator_provider=agg_slot.get("provider"), aggregator_temperature=pending.get("aggregator_temperature"),
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output, aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -567,7 +588,7 @@ index d0f9a05db..fbfa65a95 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1032,10 +1320,10 @@ class MoAChatCompletions:
+@@ -1032,10 +1341,10 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -580,7 +601,7 @@ index d0f9a05db..fbfa65a95 100644
  
      def rebase_prepared_request(self, prepared: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
          """Re-attach already-generated guidance to a rebuilt (compressed) transcript."""
-@@ -1043,6 +1331,7 @@ class MoAChatCompletions:
+@@ -1043,6 +1352,7 @@ class MoAChatCompletions:
          agg_messages = [dict(message) for message in messages]
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
@@ -588,7 +609,7 @@ index d0f9a05db..fbfa65a95 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1195,12 +1484,18 @@ class MoAChatCompletions:
+@@ -1195,12 +1505,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -609,7 +630,7 @@ index d0f9a05db..fbfa65a95 100644
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1209,6 +1504,11 @@ class MoAChatCompletions:
+@@ -1209,6 +1525,11 @@ class MoAChatCompletions:
          # An interrupted fan-out is a partial snapshot: never cache it (a HIT would
          # replay placeholder notes every iteration).
          interrupted = any(text == _INTERRUPTED_REFERENCE_NOTE for _lbl, text, _acct in reference_outputs)
@@ -621,7 +642,7 @@ index d0f9a05db..fbfa65a95 100644
          self._ref_cache_key = None if interrupted else cache_key
          self._ref_cache_outputs = [] if interrupted else list(reference_outputs)
          # Fold advisor spend into accounting exactly once per turn.
-@@ -1220,9 +1520,12 @@ class MoAChatCompletions:
+@@ -1220,9 +1541,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -635,7 +656,7 @@ index d0f9a05db..fbfa65a95 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1278,6 +1581,9 @@ class MoAChatCompletions:
+@@ -1278,6 +1602,9 @@ class MoAChatCompletions:
                  f"References: {', '.join(label for label, _, _ in agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
                  "answer the user directly or call tools as needed.\n\n"
@@ -645,7 +666,7 @@ index d0f9a05db..fbfa65a95 100644
                  f"{_join_reference_outputs(agg_refs, degraded)}"
              )
          return None
-@@ -1293,6 +1599,111 @@ class MoAChatCompletions:
+@@ -1293,6 +1620,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -757,7 +778,7 @@ index d0f9a05db..fbfa65a95 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1324,6 +1735,12 @@ class MoAChatCompletions:
+@@ -1324,6 +1756,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -770,7 +791,7 @@ index d0f9a05db..fbfa65a95 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1359,6 +1776,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1359,6 +1797,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -1212,10 +1233,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..5a3d7b162
+index 000000000..3189149fa
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,1104 @@
+@@ -0,0 +1,1164 @@
 +from __future__ import annotations
 +
 +import json
@@ -2320,6 +2341,66 @@ index 000000000..5a3d7b162
 +    assert "[removed unverified tool-output claim]" in guidance
 +    assert ref["scrub"]["removed"] >= 1
 +    assert ref["scrub"]["marked"] == 0
++
++# ---- XML tool-call fabrication (longcat native syntax, 2026-09-16) ----
++
++
++_LONGCAT_SPAM = (
++    "Ищу в базе.\n"
++    "<longcat_tool_call>search_files\n"
++    "<longcat_arg_key>path</longcat_arg_key>\n"
++    "<longcat_arg_value>C:\\qa-helper\\knowledge_base</longcat_arg_value>\n"
++    "</longcat_tool_call>\n"
++    "Дальше сам."
++)
++
++
++def test_scrub_cuts_naked_xml_tool_call_block_whole():
++    """Naked <*_tool_call> opener consumes arg/close lines: one note, no residue."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    scrubbed, removed, marked = _scrub_unverified_tool_claims(
++        _LONGCAT_SPAM, "совершенно другой контекст"
++    )
++    assert (removed, marked) == (1, 0)
++    assert "longcat_tool_call" not in scrubbed
++    assert "knowledge_base" not in scrubbed
++    assert "[removed unverified tool-output claim]" in scrubbed
++    assert "Дальше сам." in scrubbed
++
++
++def test_scrub_marks_quoted_xml_tool_call_opener():
++    """Opener quoted verbatim from context is marked, not cut."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    ctx = "лог хода: <longcat_tool_call>search_files конец лога"
++    scrubbed, removed, marked = _scrub_unverified_tool_claims(
++        "<longcat_tool_call>search_files\nДальше.", ctx
++    )
++    assert (removed, marked) == (0, 1)
++    assert "[UNVERIFIED-CLAIM" in scrubbed
++    assert "<longcat_tool_call>search_files" in scrubbed
++
++
++def test_scrub_cuts_bullet_prefixed_xml_tool_call():
++    """M1: '- <longcat_tool_call>...' prefix must not mask the filter."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    scrubbed, removed, _ = _scrub_unverified_tool_claims(
++        "- <longcat_tool_call>search_files\n</longcat_tool_call>\nОк.",
++        "другой контекст",
++    )
++    assert removed == 1
++    assert "longcat_tool_call" not in scrubbed
++    assert "Ок." in scrubbed
++
++
++def test_scrub_keeps_inline_xml_prose():
++    """A subscriber line or mid-sentence tag outside any block is not a claim."""
++    from agent.moa_loop import _scrub_unverified_tool_claims
++
++    for line in ("<b>1 493</b> подписчиков", "Обычный текст про <div> верстку."):
++        assert _scrub_unverified_tool_claims(line, "другой контекст") == (line, 0, 0)
 diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
 new file mode 100644
 index 000000000..8781db710
