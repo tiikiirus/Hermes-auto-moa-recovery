@@ -49,12 +49,12 @@ def _write_registry(repo: pathlib.Path, entries: list[dict]) -> None:
 
 def _write_profile(path: pathlib.Path, moa: dict, profile_name: str | None = None) -> None:
     """Write a minimal profile config.yaml with given moa block."""
-    # model/default must match EXPECTED_DEFAULTS for semantic_checks to pass
     if profile_name is None:
         profile_name = path.parent.name if "profiles" in path.parts else path.stem
-    expected = moa_sync.EXPECTED_DEFAULTS.get(profile_name, "free_auto_moa")
+    # model.default — реальная модель-каркас, не MoA-пресет!
+    model_default = moa_sync.EXPECTED_MODEL_DEFAULTS.get(profile_name, "free_auto_moa")
     data = {
-        "model": {"provider": "moa", "default": expected},
+        "model": {"provider": "moa", "default": model_default},
         "moa": moa,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,7 +151,7 @@ def test_fleet_profile_matches_when_synced(tmp_path, monkeypatch):
     for name in ("default", "mxstat"):
         cfg = tmp_path / f"{name}.yaml"
         data = {
-            "model": {"provider": "moa", "default": moa_sync.EXPECTED_DEFAULTS[name]},
+            "model": {"provider": "moa", "default": moa_sync.EXPECTED_MODEL_DEFAULTS[name]},
             "moa": {"default_preset": moa_sync.EXPECTED_DEFAULTS[name]},
         }
         desired = moa_sync.merged_moa(data, canon_moa, profile_name=name)

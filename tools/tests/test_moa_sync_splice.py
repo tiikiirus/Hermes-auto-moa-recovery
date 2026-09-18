@@ -63,7 +63,7 @@ def _write_drifted_profile(path: pathlib.Path) -> None:
         OUTSIDE_COMMENT
         + "model:\n"
         + "  provider: moa\n"
-        + "  default: free_auto_moa\n"
+        + "  default: inclusionai/ling-3.0-flash-fin:free\n"  # реальная модель, не MoA-пресет
         + "moa:\n"
         + "  default_preset: free_auto_moa\n"
         + INSIDE_COMMENT
@@ -90,6 +90,7 @@ def sync_env(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setattr(moa_sync, "PROFILE_PATHS", {"default": profile})
     monkeypatch.setattr(moa_sync, "EXPECTED_DEFAULTS", {"default": "free_auto_moa"})
+    monkeypatch.setattr(moa_sync, "EXPECTED_MODEL_DEFAULTS", {"default": "inclusionai/ling-3.0-flash-fin:free"})
     return repo, profile
 
 

@@ -26,12 +26,29 @@ PROFILE_PATHS = {
     "auto-moa": Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "profiles" / "auto-moa" / "config.yaml",
 }
 EXPECTED_DEFAULTS = {
+    # MoA-пресеты (для moa.default_preset и обратной совместимости с тестами,
+    # которые мокают EXPECTED_DEFAULTS через monkeypatch).
     "default": "free_auto_moa",
     "mxstat": "pay_auto_moa",
     "fantrax": "free_auto_moa",
     "aiqa": "free_auto_moa",
     "auto-moa": "free_auto_moa",
 }
+
+# Реальные модели-каркас для model.default (не MoA-пресеты!).
+# До 2026-09-18 model.default указывал на MoA-пресеты, но они не существуют
+# как модели и probe → 404 → false REMOVED. После исправления model.default
+# должен указывать на реальную модель, а MoA-роутер работает через
+# moa.default_preset — это отдельный ключ, не связанный с model.default.
+EXPECTED_MODEL_DEFAULTS = {
+    "default": "inclusionai/ling-3.0-flash-fin:free",
+    "mxstat": "z-ai/glm-5.3-flash",
+    "fantrax": "inclusionai/ling-3.0-flash-fin:free",
+    "aiqa": "inclusionai/ling-3.0-flash-fin:free",
+    "auto-moa": "inclusionai/ling-3.0-flash-fin:free",
+}
+
+EXPECTED_MOA_PRESETS = EXPECTED_DEFAULTS  # алиас — это те же MoA-пресеты
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -128,13 +145,23 @@ def semantic_checks(name: str, data: dict[str, Any]) -> list[str]:
     moa = data.get("moa") or {}
     presets = moa.get("presets") or {}
     errors: list[str] = []
-    expected = EXPECTED_DEFAULTS[name]
+
+    # model.default — реальная модель-каркас (не MoA-пресет!)
     if model.get("provider") != "moa":
         errors.append(f"provider={model.get('provider')!r}, expected 'moa'")
-    if model.get("default") != expected:
-        errors.append(f"model.default={model.get('default')!r}, expected {expected!r}")
-    if moa.get("default_preset") != expected:
-        errors.append(f"moa.default_preset={moa.get('default_preset')!r}, expected {expected!r}")
+    expected_model = EXPECTED_MODEL_DEFAULTS.get(name)
+    if expected_model is None:
+        errors.append(f"unknown profile {name!r} in EXPECTED_MODEL_DEFAULTS")
+    elif model.get("default") != expected_model:
+        errors.append(f"model.default={model.get('default')!r}, expected {expected_model!r}")
+
+    # moa.default_preset — MoA-пресет (роутер или конкретный пресет)
+    expected_preset = EXPECTED_MOA_PRESETS.get(name)
+    if expected_preset is None:
+        errors.append(f"unknown profile {name!r} in EXPECTED_MOA_PRESETS")
+    elif moa.get("default_preset") != expected_preset:
+        errors.append(f"moa.default_preset={moa.get('default_preset')!r}, expected {expected_preset!r}")
+
     if len(presets) != 12:
         errors.append(f"preset count={len(presets)}, expected 12")
     if "auto_moa" in presets:
