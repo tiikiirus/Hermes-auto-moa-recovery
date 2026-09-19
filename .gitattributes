@@ -52,6 +52,35 @@ skills/anti-ai-slop/tests/fixtures/masking.md text eol=lf
 skills/anti-ai-slop/tests/fixtures/slop.md text eol=lf
 skills/anti-ai-slop/tests/fixtures/watermarked.md text eol=lf
 
+skills/visual-explainer/.claude-plugin/plugin.json text eol=lf
+skills/visual-explainer/LICENSE text eol=lf
+skills/visual-explainer/SKILL.md text eol=lf
+skills/visual-explainer/commands/diff-review.md text eol=lf
+skills/visual-explainer/commands/fact-check.md text eol=lf
+skills/visual-explainer/commands/generate-slides.md text eol=lf
+skills/visual-explainer/commands/generate-visual-plan.md text eol=lf
+skills/visual-explainer/commands/generate-web-diagram.md text eol=lf
+skills/visual-explainer/commands/plan-review.md text eol=lf
+skills/visual-explainer/commands/project-recap.md text eol=lf
+skills/visual-explainer/extension.ts text eol=lf
+skills/visual-explainer/mcp/README.md text eol=lf
+skills/visual-explainer/mcp/server.mjs text eol=lf
+skills/visual-explainer/pptx/README.md text eol=lf
+skills/visual-explainer/pptx/export.mjs text eol=lf
+skills/visual-explainer/quick/README.md text eol=lf
+skills/visual-explainer/quick/base.css text eol=lf
+skills/visual-explainer/quick/render.mjs text eol=lf
+skills/visual-explainer/quick/schema.json text eol=lf
+skills/visual-explainer/references/css-patterns.md text eol=lf
+skills/visual-explainer/references/libraries.md text eol=lf
+skills/visual-explainer/references/responsive-nav.md text eol=lf
+skills/visual-explainer/references/slide-patterns.md text eol=lf
+skills/visual-explainer/references/themes.md text eol=lf
+skills/visual-explainer/templates/architecture.html text eol=lf
+skills/visual-explainer/templates/data-table.html text eol=lf
+skills/visual-explainer/templates/mermaid-flowchart.html text eol=lf
+skills/visual-explainer/templates/slide-deck.html text eol=lf
+
 # Documentation stays normalized.
 README.md text eol=lf
 USER_GUIDE_RU.txt text eol=lf
