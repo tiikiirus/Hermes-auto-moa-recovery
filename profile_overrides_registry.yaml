@@ -52,15 +52,5 @@ registry:
     value: every_n:3
     status: active
     justification: "NEWLOG-704 — same shape, pay path (router preset)"
-  - profile: fantrax
-    preset: default
-    key: fanout
-    value: every_n:3
-    status: canary
-    justification: "Canary 2/6 — default is explicit user choice path; validates cadence at minimal blast radius"
-  - profile: fantrax
-    preset: free_auto_moa
-    key: fanout
-    value: every_n:3
-    status: canary
-    justification: "Canary 2/6 — free_auto_moa is router sink for undifferentiated traffic (worst-case fan-out volume)"
+# fantrax canary 2/6 entries REMOVED 2026-09-18 (rolled back: end-week
+# 22.64% vs 6.97% baseline; see canon comment). No fantrax overrides remain.

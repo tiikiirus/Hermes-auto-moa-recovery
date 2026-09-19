@@ -253,22 +253,10 @@ moa:
           fanout: every_n:3
         pay_auto_moa:
           fanout: every_n:3
-    # fantrax — canary 2/6: same shape as mxstat but on FREE path
-    # (default_preset free_auto_moa). user_turn froze one "write code" frame
-    # for a whole session there too (read_file BLOCKED runs, 2026-09-10).
-    # Measured before applying (tools/probes/moa_fanout_spend_projection.py, 2026-09-11):
-    # T median=4 / max=42, so every_n:3 multiplies ADVISOR requests by ~2.9x avg
-    # (median 2x, deep turns to 14x) and 15/27 turns gain a fan-out. $=0 (all :free),
-    # aggregator unchanged. Cost is quota: 20×429 already in log.
-    # Canary choice: default + free_auto_moa are two structurally different load
-    # paths — explicit preset vs router sink for undifferentiated traffic — so a
-    # 2-preset canary gives the worst-case signal at 1/3 the blast radius.
-    # Baseline 429/week and rollback thresholds are fixed BEFORE canary enable;
-    # promote to remaining 4 only after the week if hard trigger (>2x baseline
-    # sustained 48h) did not fire. See profile_overrides_registry.yaml (canary).
-    fantrax:
-      presets:
-        default:
-          fanout: every_n:3
-        free_auto_moa:
-          fanout: every_n:3
+    # fantrax canary 2/6 ROLLED BACK 2026-09-18: end-week rate 22.64%
+    # (36/159) vs baseline 6.97% (20/287) — 3.2x, over the hard 2x line.
+    # Same-day control mxstat (same :free advisor pool, same volume 160 req)
+    # stayed at 8.12%, so the spike tracks the canary's extra fan-out bursts,
+    # not an upstream tightening. fantrax is back on user_turn; do NOT promote
+    # the remaining 4 presets without a new canary design (e.g. fanout cap
+    # instead of cadence).
