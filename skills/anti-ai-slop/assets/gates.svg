@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="780" viewBox="0 0 880 780" role="img" aria-labelledby="t d">
+  <title id="t">anti-ai-slop gates</title>
+  <desc id="d">A draft is rewritten, then passes four gates: invisible characters, a linter, a second agent review, and an optional review by another model. Failing drafts go back to the rewrite, up to two passes.</desc>
+  <style>
+    .bg{fill:#ffffff}
+    .card{fill:#f6f8fa;stroke:#d0d7de;stroke-width:1.5}
+    .opt{fill:#ffffff;stroke:#8c959f;stroke-width:1.5;stroke-dasharray:6 5}
+    .pill{fill:#1f2328}
+    .pilltext{fill:#ffffff;font:600 15px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .label{fill:#0969da;font:700 12px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;letter-spacing:1.2px}
+    .title{fill:#1f2328;font:700 19px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .sub{fill:#59636e;font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .check{fill:#1f2328;font:14.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .flow{stroke:#8c959f;stroke-width:2;fill:none}
+    .loop{stroke:#cf222e;stroke-width:2;fill:none;stroke-dasharray:5 4}
+    .looptext{fill:#cf222e;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .divider{stroke:#d0d7de;stroke-width:1}
+    .arrowhead{fill:#8c959f}
+    .looparrow{fill:#cf222e}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0d1117}
+      .card{fill:#161b22;stroke:#30363d}
+      .opt{fill:#0d1117;stroke:#6e7681}
+      .pill{fill:#f0f6fc}
+      .pilltext{fill:#0d1117}
+      .label{fill:#4493f8}
+      .title{fill:#f0f6fc}
+      .sub{fill:#9198a1}
+      .check{fill:#e6edf3}
+      .flow{stroke:#6e7681}
+      .arrowhead{fill:#6e7681}
+      .loop{stroke:#f85149}
+      .looptext{fill:#f85149}
+      .looparrow{fill:#f85149}
+      .divider{stroke:#30363d}
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="looparrow" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="880" height="780" rx="16"/>
+
+  <!-- Draft and rewrite -->
+  <rect class="pill" x="270" y="24" width="200" height="44" rx="22"/>
+  <text class="pilltext" x="370" y="51" text-anchor="middle">AI-written draft</text>
+  <line class="flow" x1="370" y1="68" x2="370" y2="94" marker-end="url(#a)"/>
+  <rect class="pill" x="230" y="96" width="280" height="44" rx="22"/>
+  <text class="pilltext" x="370" y="123" text-anchor="middle">Agent rewrites the draft</text>
+  <line class="flow" x1="370" y1="140" x2="370" y2="166" marker-end="url(#a)"/>
+
+  <!-- Gate 1 -->
+  <rect class="card" x="40" y="168" width="660" height="100" rx="12"/>
+  <text class="label" x="64" y="198">GATE 1</text>
+  <text class="title" x="64" y="224">Invisible characters</text>
+  <text class="sub" x="64" y="248">sanitize.py</text>
+  <line class="divider" x1="288" y1="184" x2="288" y2="252"/>
+  <text class="check" x="308" y="200">• Zero-width spaces and joiners</text>
+  <text class="check" x="308" y="224">• Bidi controls and hidden tag characters</text>
+  <text class="check" x="308" y="248">• Odd spaces, curly quotes, ellipses</text>
+  <line class="flow" x1="370" y1="268" x2="370" y2="290" marker-end="url(#a)"/>
+
+  <!-- Gate 2 -->
+  <rect class="card" x="40" y="292" width="660" height="124" rx="12"/>
+  <text class="label" x="64" y="324">GATE 2</text>
+  <text class="title" x="64" y="350">Linter</text>
+  <text class="sub" x="64" y="374">slopcheck.py</text>
+  <text class="sub" x="64" y="394">pass at 90/100</text>
+  <line class="divider" x1="288" y1="308" x2="288" y2="400"/>
+  <text class="check" x="308" y="322">• Sentence templates and fake-deep endings</text>
+  <text class="check" x="308" y="346">• AI vocabulary, empty phrases, chatbot lines</text>
+  <text class="check" x="308" y="370">• Unsourced claims and vague crowds</text>
+  <text class="check" x="308" y="394">• Contrast habits, rhythm, formatting</text>
+  <line class="flow" x1="370" y1="416" x2="370" y2="438" marker-end="url(#a)"/>
+
+  <!-- Gate 3 -->
+  <rect class="card" x="40" y="440" width="660" height="124" rx="12"/>
+  <text class="label" x="64" y="472">GATE 3</text>
+  <text class="title" x="64" y="498">Second agent</text>
+  <text class="sub" x="64" y="522">sees both drafts,</text>
+  <text class="sub" x="64" y="542">not the reasoning</text>
+  <line class="divider" x1="288" y1="456" x2="288" y2="548"/>
+  <text class="check" x="308" y="470">• Made-up facts and connections</text>
+  <text class="check" x="308" y="494">• Changed meaning, dropped caveats</text>
+  <text class="check" x="308" y="518">• Synonym cycling</text>
+  <text class="check" x="308" y="542">• Slop a script can't see</text>
+  <line class="flow" x1="370" y1="564" x2="370" y2="586" marker-end="url(#a)" stroke-dasharray="5 4"/>
+
+  <!-- Gate 4 -->
+  <rect class="opt" x="40" y="588" width="660" height="100" rx="12"/>
+  <text class="label" x="64" y="618">GATE 4 · OPTIONAL</text>
+  <text class="title" x="64" y="644">Another model</text>
+  <text class="sub" x="64" y="668">grade.py via LiteLLM</text>
+  <line class="divider" x1="288" y1="604" x2="288" y2="672"/>
+  <text class="check" x="308" y="620">• Same review by a different model</text>
+  <text class="check" x="308" y="644">• Gemini 3.8 Flash by default, any provider</text>
+  <text class="check" x="308" y="668">• Human score and cost per reviewer</text>
+  <line class="flow" x1="370" y1="688" x2="370" y2="710" marker-end="url(#a)"/>
+
+  <!-- Result -->
+  <rect class="pill" x="220" y="712" width="300" height="46" rx="23"/>
+  <text class="pilltext" x="370" y="740" text-anchor="middle">Clean draft + what changed</text>
+
+  <!-- Fail loop -->
+  <line class="loop" x1="700" y1="354" x2="780" y2="354"/>
+  <line class="loop" x1="700" y1="502" x2="780" y2="502"/>
+  <line class="loop" x1="700" y1="638" x2="780" y2="638"/>
+  <path class="loop" d="M780,638 L780,118 L514,118" marker-end="url(#r)"/>
+  <text class="looptext" transform="translate(806,380) rotate(90)" text-anchor="middle">Fails? Back to the rewrite, up to 2 passes</text>
+</svg>

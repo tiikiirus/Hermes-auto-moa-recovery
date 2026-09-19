@@ -109,6 +109,7 @@ recovery-проекте, поэтому не затирается при `reset 
 | `tools/live_tree_check.py` | Гейт чистоты live-дерева: вне 9 файлов патча грязи быть не должно (`--check` только отчёт; `--fix` откатывает ТРЕКНУТЫЙ шум через `git checkout`, untracked только показывает, не удаляет). |
 | `tools/moa_preset_audit_apply.py` | Идемпотентный применитель аудита пресетов (F1–F6) в канон + 6 live-конфигов: правит только строки внутри `moa:`-блока, комментарии и форматирование сохраняет (`--dry-run` / `--apply`). |
 | `run-moa-tests.bat` | Focused MoA-pytest со свежим `--basetemp` на прогон (обход WinError 5 в shared pytest-temp; чужой `pytest-of-tiki` не трогает). |
+| `skills/anti-ai-slop/` | Вендор скилла [anti-ai-slop](https://github.com/misbahsy/anti-ai-slop) (rev `1b7d68f`, MIT): `sanitize.py` (невидимые символы) + `slopcheck.py` (линтер, порог 90) + `grade.py` (ревью вторым агентом/панелью). Использование: `python skills/anti-ai-slop/scripts/slopcheck.py draft.md`. Тесты апстрима — прямые скрипты (`python skills/anti-ai-slop/tests/test_slopcheck.py`), не pytest; `test_credentials` имеет 1 известное Windows-only падение (POSIX-проверка `0o600`). В тестовый гейт не вшит осознанно: русская типографика (тире) даёт ложные F1. |
 | `USER_GUIDE_RU.txt` | Подробная русская инструкция. |
 
 ## Схема MoA и ротация моделей (актуально с 01.09.2026)

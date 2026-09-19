@@ -31,6 +31,26 @@ tools/tests/test_cli_doctor.py text eol=lf
 tools/tests/test_fleet_consistency.py text eol=lf
 tools/tests/test_repair.py text eol=lf
 tools/tests/test_patch_reexport.py text eol=lf
+skills/anti-ai-slop/SKILL.md text eol=lf
+skills/anti-ai-slop/LICENSE text eol=lf
+skills/anti-ai-slop/assets/gates.svg text eol=lf
+skills/anti-ai-slop/references/lexicon.md text eol=lf
+skills/anti-ai-slop/references/patterns.md text eol=lf
+skills/anti-ai-slop/references/reviewer.md text eol=lf
+skills/anti-ai-slop/references/voice.md text eol=lf
+skills/anti-ai-slop/scripts/credentials.py text eol=lf
+skills/anti-ai-slop/scripts/detect.py text eol=lf
+skills/anti-ai-slop/scripts/grade.py text eol=lf
+skills/anti-ai-slop/scripts/rules.json text eol=lf
+skills/anti-ai-slop/scripts/sanitize.py text eol=lf
+skills/anti-ai-slop/scripts/slopcheck.py text eol=lf
+skills/anti-ai-slop/tests/test_credentials.py text eol=lf
+skills/anti-ai-slop/tests/test_grade.py text eol=lf
+skills/anti-ai-slop/tests/test_slopcheck.py text eol=lf
+skills/anti-ai-slop/tests/fixtures/clean.md text eol=lf
+skills/anti-ai-slop/tests/fixtures/masking.md text eol=lf
+skills/anti-ai-slop/tests/fixtures/slop.md text eol=lf
+skills/anti-ai-slop/tests/fixtures/watermarked.md text eol=lf
 
 # Documentation stays normalized.
 README.md text eol=lf
