@@ -96,21 +96,27 @@ def _extract_quotes(line: str) -> list[str]:
     return out
 
 
-def _check_verified_quotes(text: str, context_text: str) -> tuple[str, int, int, list[str]]:
+def _check_verified_quotes(text: str, context_text: str) -> tuple[str, int, int, list[str], int]:
     """Shadow of Stage B detector.
 
-    Returns (relabeled_text, downgraded, checked, downgraded_lines).
+    Returns (relabeled_text, downgraded, checked, downgraded_lines,
+    skipped_structural).
     """
     if not isinstance(text, str) or not text:
-        return text, 0, 0, []
+        return text, 0, 0, [], 0
     norm_context = _normalize_for_match(context_text)
     lines = text.splitlines()
     out: list[str] = []
     downgraded = 0
     checked = 0
     downgraded_lines: list[str] = []
+    skipped_structural = 0
     # Section tracking: VERIFIED vs INFERRED
     current_section: str | None = None
+    # Fenced code blocks are presentation, not claims - the fence state is
+    # tracked across sections so a "verified:" line inside code never flips
+    # the section and fence content is never judged.
+    in_fence = False
     # Buffer for run grouping: consecutive downgraded VERIFIED lines get one banner
     pending_run: list[str] = []
 
@@ -123,6 +129,18 @@ def _check_verified_quotes(text: str, context_text: str) -> tuple[str, int, int,
 
     for line in lines:
         stripped = line.strip()
+        # Structural skip (replay 2026-09: ``` / }, / | comp-001 | ... lines
+        # were judged as claims). Fence delimiters toggle, fenced content and
+        # markdown table rows pass through unjudged without flushing runs.
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            skipped_structural += 1
+            out.append(line)
+            continue
+        if in_fence:
+            skipped_structural += 1
+            out.append(line)
+            continue
         low = _normalize_for_match(line)
         if low.startswith("verified:"):
             # flush previous pending before switching section
@@ -149,6 +167,11 @@ def _check_verified_quotes(text: str, context_text: str) -> tuple[str, int, int,
                 out.append("[UNVERIFIED-CLAIM, no verbatim quote from the transcript — treated as inference]")
                 out.extend(pending_run)
                 pending_run = []
+            out.append(line)
+            continue
+        if re.match(r"^\s*\|.*\|\s*$", line) and "|" in stripped[1:]:
+            # markdown table row (incl. |---|---| separator): data, not a claim
+            skipped_structural += 1
             out.append(line)
             continue
         if current_section != "VERIFIED":
@@ -205,7 +228,7 @@ def _check_verified_quotes(text: str, context_text: str) -> tuple[str, int, int,
         out.append("[UNVERIFIED-CLAIM, no verbatim quote from the transcript — treated as inference]")
         out.extend(pending_run)
 
-    return "\n".join(out), downgraded, checked, downgraded_lines
+    return "\n".join(out), downgraded, checked, downgraded_lines, skipped_structural
 
 
 def hermes_root() -> Path:
@@ -243,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     total_verified = 0
     total_downgraded = 0
     total_checked = 0
+    total_skipped_structural = 0
     cause_hist: collections.Counter[str] = collections.Counter()
     downgraded_examples: list[tuple[str, str]] = []  # (file, line)
 
@@ -290,10 +314,11 @@ def main(argv: list[str] | None = None) -> int:
                 # Only consider lines in VERIFIED section
                 if "VERIFIED" not in text and "verified" not in text.lower():
                     continue
-                _, downgraded, checked, d_lines = _check_verified_quotes(text, corpus)
+                _, downgraded, checked, d_lines, skipped = _check_verified_quotes(text, corpus)
                 total_downgraded += downgraded
                 total_checked += checked
                 total_verified += downgraded + checked
+                total_skipped_structural += skipped
                 for dl in d_lines:
                     # Classify cause
                     q = _extract_quotes(dl)
@@ -314,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"verified_bullets : {total_verified}")
     print(f"  checked (good) : {total_checked}")
     print(f"  downgraded     : {total_downgraded}")
+    print(f"  skipped (fence/table, not claims): {total_skipped_structural}")
     if total_verified:
         print(f"  downgraded rate: {total_downgraded/total_verified:.1%}")
     print(f"cause histogram  : {dict(cause_hist)}")
