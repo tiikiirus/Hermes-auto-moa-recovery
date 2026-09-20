@@ -220,7 +220,7 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index d0f9a05db..2a5eb287b 100644
+index d0f9a05db..3599bdd67 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
 @@ -119,6 +119,80 @@ _preset_cache_lock = threading.Lock()
@@ -304,7 +304,21 @@ index d0f9a05db..2a5eb287b 100644
  def _resolve_preset_cached(preset_name: str) -> tuple[dict[str, Any], Any]:
      """``(preset, raw moa config)``; the resolved preset is cached per config file signature
      (skips resolve_moa_preset's full validation of the moa block on every create())."""
-@@ -168,6 +242,11 @@ class _RefAccounting:
+@@ -151,6 +225,13 @@ _RUNTIME_CACHE_TTL_SECONDS = 300.0
+ # Cap on concurrent reference calls (guards pathologically large presets).
+ _MAX_REFERENCE_WORKERS = 8
+ 
++# Spend ceiling for every_n cadence: at most this many advisor fan-outs per
++# user turn no matter how deep the tool loop goes. every_n:3 on a 58-iteration
++# turn ran 58 fan-outs (incident 2026-09-14); with the ceiling the same turn
++# runs 4 (iterations 1, 4, 7, 10) and reuses the last guidance after that.
++# Turns with T<=10 are unaffected. user_turn/per_iteration are untouched.
++_MAX_FANOUTS_PER_TURN = 4
++
+ 
+ @dataclass(slots=True)
+ class _RefAccounting:
+@@ -168,6 +249,11 @@ class _RefAccounting:
      _: KW_ONLY
      messages: Any = None
      output: str | None = None
@@ -316,7 +330,7 @@ index d0f9a05db..2a5eb287b 100644
      model: str | None = None
      provider: str | None = None
      temperature: Any = None
-@@ -208,6 +287,17 @@ _REFERENCE_SYSTEM_PROMPT = (
+@@ -208,6 +294,17 @@ _REFERENCE_SYSTEM_PROMPT = (
      "tools or access. Your response is private guidance handed to the "
      "aggregator, not an answer shown to the user. NEVER claim to have executed "
      "anything."
@@ -334,7 +348,7 @@ index d0f9a05db..2a5eb287b 100644
  )
  
  
-@@ -743,6 +833,162 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
+@@ -743,6 +840,162 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
      return joined
  
  
@@ -497,7 +511,7 @@ index d0f9a05db..2a5eb287b 100644
  def _sum_reference_accounting(outputs: list[tuple[str, str, Any]]) -> tuple[Any, Any]:
      """Sum fan-out usage AND cost in dollars (each advisor priced at its OWN rate)."""
      usage = CanonicalUsage()
-@@ -780,6 +1026,51 @@ def _guidance_inputs(
+@@ -780,6 +1033,51 @@ def _guidance_inputs(
      return agg_refs, _degraded_notice(failed_labels, policy), bool(reference_outputs) and not successful
  
  
@@ -549,7 +563,7 @@ index d0f9a05db..2a5eb287b 100644
  def aggregate_moa_context(
      *, user_prompt: str, api_messages: list[dict[str, Any]], reference_models: list[dict[str, Any]],
      aggregator: dict[str, Any], temperature: float | None = None, aggregator_temperature: float | None = None,
-@@ -810,6 +1101,15 @@ def aggregate_moa_context(
+@@ -810,6 +1108,15 @@ def aggregate_moa_context(
      except Exception:  # pragma: no cover - privacy filter must never break a turn
          logger.debug("MoA privacy filter check failed", exc_info=True)
      agg_refs, degraded, all_failed = _guidance_inputs(reference_outputs, privacy_full, degraded_reference_policy)
@@ -565,7 +579,7 @@ index d0f9a05db..2a5eb287b 100644
      joined = _join_reference_outputs(agg_refs, degraded)
      if all_failed:
          # Skip the aggregator: synthesizing over nothing can block for the full provider timeout.
-@@ -947,6 +1247,14 @@ class MoAChatCompletions:
+@@ -947,6 +1254,14 @@ class MoAChatCompletions:
          self.preset_name = preset_name or "default"
          self.reference_callback = reference_callback
          self._agent = agent
@@ -580,7 +594,15 @@ index d0f9a05db..2a5eb287b 100644
          # Reference cache keyed on the advisory-view signature (HIT = no re-run, no re-emit).
          self._ref_cache_key: tuple | None = None
          self._ref_cache_outputs: list[tuple[str, str, Any]] = []
-@@ -1020,6 +1328,7 @@ class MoAChatCompletions:
+@@ -966,6 +1281,7 @@ class MoAChatCompletions:
+         self._fanout_iteration_count = 0
+         self._fanout_turn_sig: str | None = None
+         self._fanout_last_state_sig: str | None = None
++        self._fanout_miss_count = 0
+         self._privacy_mode: str = ""  # normalized moa.privacy_filter, refreshed per create()
+ 
+     def consume_reference_usage(self) -> tuple[Any, Any]:
+@@ -1020,6 +1336,7 @@ class MoAChatCompletions:
                  aggregator_provider=agg_slot.get("provider"), aggregator_temperature=pending.get("aggregator_temperature"),
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output, aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -588,7 +610,7 @@ index d0f9a05db..2a5eb287b 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1032,10 +1341,10 @@ class MoAChatCompletions:
+@@ -1032,10 +1349,10 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -601,7 +623,7 @@ index d0f9a05db..2a5eb287b 100644
  
      def rebase_prepared_request(self, prepared: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
          """Re-attach already-generated guidance to a rebuilt (compressed) transcript."""
-@@ -1043,6 +1352,7 @@ class MoAChatCompletions:
+@@ -1043,6 +1360,7 @@ class MoAChatCompletions:
          agg_messages = [dict(message) for message in messages]
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
@@ -609,7 +631,27 @@ index d0f9a05db..2a5eb287b 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1195,12 +1505,18 @@ class MoAChatCompletions:
+@@ -1179,6 +1497,7 @@ class MoAChatCompletions:
+                 self._fanout_turn_sig = turn_sig
+                 self._fanout_iteration_count = 0
+                 self._fanout_last_state_sig = None
++                self._fanout_miss_count = 0
+             state_sig = _hash_messages(ref_messages)
+             if state_sig != self._fanout_last_state_sig:
+                 self._fanout_last_state_sig = state_sig
+@@ -1186,6 +1505,11 @@ class MoAChatCompletions:
+             # Iteration 1 is on-cadence; then every Nth iteration after it.
+             if (self._fanout_iteration_count - 1) % every_n != 0 and self._ref_cache_outputs:
+                 return self._ref_cache_key
++            # Spend ceiling: past _MAX_FANOUTS_PER_TURN fan-outs this turn,
++            # every further iteration is a HIT (reuses the last guidance).
++            if self._fanout_miss_count >= _MAX_FANOUTS_PER_TURN and self._ref_cache_outputs:
++                return self._ref_cache_key
++            self._fanout_miss_count += 1
+ 
+         return (self.preset_name, _hash_messages(sig_messages), tuple(_slot_label(s) for s in reference_models))
+ 
+@@ -1195,12 +1519,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -630,7 +672,7 @@ index d0f9a05db..2a5eb287b 100644
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1209,6 +1525,11 @@ class MoAChatCompletions:
+@@ -1209,6 +1539,11 @@ class MoAChatCompletions:
          # An interrupted fan-out is a partial snapshot: never cache it (a HIT would
          # replay placeholder notes every iteration).
          interrupted = any(text == _INTERRUPTED_REFERENCE_NOTE for _lbl, text, _acct in reference_outputs)
@@ -642,7 +684,7 @@ index d0f9a05db..2a5eb287b 100644
          self._ref_cache_key = None if interrupted else cache_key
          self._ref_cache_outputs = [] if interrupted else list(reference_outputs)
          # Fold advisor spend into accounting exactly once per turn.
-@@ -1220,9 +1541,12 @@ class MoAChatCompletions:
+@@ -1220,9 +1555,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -656,7 +698,7 @@ index d0f9a05db..2a5eb287b 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1278,6 +1602,9 @@ class MoAChatCompletions:
+@@ -1278,6 +1616,9 @@ class MoAChatCompletions:
                  f"References: {', '.join(label for label, _, _ in agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
                  "answer the user directly or call tools as needed.\n\n"
@@ -666,7 +708,7 @@ index d0f9a05db..2a5eb287b 100644
                  f"{_join_reference_outputs(agg_refs, degraded)}"
              )
          return None
-@@ -1293,6 +1620,111 @@ class MoAChatCompletions:
+@@ -1293,6 +1634,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -778,7 +820,7 @@ index d0f9a05db..2a5eb287b 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1324,6 +1756,12 @@ class MoAChatCompletions:
+@@ -1324,6 +1770,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -791,7 +833,7 @@ index d0f9a05db..2a5eb287b 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1359,6 +1797,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1359,6 +1811,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -1233,10 +1275,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..3189149fa
+index 000000000..0c16a430b
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,1164 @@
+@@ -0,0 +1,1287 @@
 +from __future__ import annotations
 +
 +import json
@@ -2401,6 +2443,129 @@ index 000000000..3189149fa
 +
 +    for line in ("<b>1 493</b> подписчиков", "Обычный текст про <div> верстку."):
 +        assert _scrub_unverified_tool_claims(line, "другой контекст") == (line, 0, 0)
++
++# ---- every_n spend ceiling (_MAX_FANOUTS_PER_TURN, incident 2026-09-14) ----
++
++
++def _write_everyn_config(home):
++    home.mkdir(exist_ok=True)
++    (home / "config.yaml").write_text(
++        """
++moa:
++  default_preset: capped
++  presets:
++    capped:
++      fanout: every_n:3
++      reference_models:
++        - provider: test
++          model: capped-ref
++      aggregator:
++        provider: test
++        model: capped-agg
++""".strip(),
++        encoding="utf-8",
++    )
++
++
++def _growing_tool_messages(base, iterations):
++    msgs = list(base)
++    yield list(msgs)
++    for i in range(1, iterations):
++        msgs = msgs + [
++            {"role": "assistant", "content": "", "tool_calls": [
++                {"id": f"c{i}", "type": "function",
++                 "function": {"name": "f", "arguments": "{}"}}]},
++            {"role": "tool", "tool_call_id": f"c{i}", "content": f"result {i}"},
++        ]
++        yield list(msgs)
++
++
++def test_everyn_fanout_capped_per_turn(tmp_path, monkeypatch):
++    """13-iteration turn on every_n:3 runs advisors 4x (iters 1,4,7,10), not 5x."""
++    from agent.moa_loop import MoAChatCompletions
++
++    home = tmp_path / ".hermes"
++    _write_everyn_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    ref_runs = []
++
++    def fake_call_llm(**kwargs):
++        if kwargs["task"] == "moa_reference":
++            ref_runs.append(kwargs["model"])
++            return _response(f"advice #{len(ref_runs)}")
++        return _response("acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    events = []
++    facade = MoAChatCompletions(
++        "capped",
++        reference_callback=lambda event, **kwargs: events.append((event, kwargs)),
++    )
++    base = [{"role": "user", "content": "do the thing"}]
++    for msgs in _growing_tool_messages(base, 13):
++        facade.create(model="capped", messages=list(msgs))
++
++    assert len(ref_runs) == 4
++    assert sum(1 for e, _ in events if e == "moa.reference") == 4
++
++
++def test_everyn_capped_iterations_reuse_last_guidance(tmp_path, monkeypatch):
++    """Past the ceiling the aggregator still gets guidance (the last one)."""
++    from agent.moa_loop import MoAChatCompletions
++
++    home = tmp_path / ".hermes"
++    _write_everyn_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    ref_runs = []
++
++    def fake_call_llm(**kwargs):
++        if kwargs["task"] == "moa_reference":
++            ref_runs.append(kwargs["model"])
++            return _response(f"advice #{len(ref_runs)}")
++        return _response("acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    facade = MoAChatCompletions("capped")
++    base = [{"role": "user", "content": "task"}]
++    prepared = [
++        facade.create(model="capped", messages=list(msgs), _moa_prepare_only=True)
++        for msgs in _growing_tool_messages(base, 13)
++    ]
++
++    assert all(p["guidance"] for p in prepared)
++    assert "advice #4" in prepared[-1]["guidance"]
++
++
++def test_everyn_ceiling_resets_on_new_turn(tmp_path, monkeypatch):
++    """A new user turn gets a fresh ceiling (the cap is per-turn, not per-facade)."""
++    from agent.moa_loop import MoAChatCompletions
++
++    home = tmp_path / ".hermes"
++    _write_everyn_config(home)
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++    ref_runs = []
++
++    def fake_call_llm(**kwargs):
++        if kwargs["task"] == "moa_reference":
++            ref_runs.append(kwargs["model"])
++        return _response("advice" if kwargs["task"] == "moa_reference" else "acted")
++
++    monkeypatch.setattr("agent.moa_loop.call_llm", fake_call_llm)
++
++    facade = MoAChatCompletions("capped")
++    for msgs in _growing_tool_messages([{"role": "user", "content": "first"}], 13):
++        facade.create(model="capped", messages=list(msgs))
++    assert len(ref_runs) == 4
++    facade.create(
++        model="capped",
++        messages=[{"role": "user", "content": "second, unrelated"}],
++    )
++    assert len(ref_runs) == 5
 diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
 new file mode 100644
 index 000000000..8781db710

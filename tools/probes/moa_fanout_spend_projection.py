@@ -118,9 +118,16 @@ def fanout_bursts(events: list, window: float) -> list[list[tuple]]:
     return bursts
 
 
+# Mirrors agent/moa_loop._MAX_FANOUTS_PER_TURN: every_n fan-outs stop after
+# this many advisor runs per user turn no matter how deep the tool loop goes.
+MAX_FANOUTS_PER_TURN = 4
+
+
 def fanouts_for(t: int, n: int) -> int:
     """Fan-outs in a turn with ``t`` aggregator iterations under ``every_n:n``."""
-    return 1 if t <= 1 else (t - 1) // n + 1
+    if t <= 1:
+        return 1
+    return min(MAX_FANOUTS_PER_TURN, (t - 1) // n + 1)
 
 
 def spend_snapshot(profile_dir: Path) -> dict:
