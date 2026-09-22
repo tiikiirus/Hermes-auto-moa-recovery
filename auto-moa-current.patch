@@ -220,10 +220,18 @@ index 000000000..428bf86bc
 +    return MoARouteDecision("fallback", str(routes["fallback"]), "fallback")
 \ No newline at end of file
 diff --git a/agent/moa_loop.py b/agent/moa_loop.py
-index d0f9a05db..3599bdd67 100644
+index d0f9a05db..b3bf275d7 100644
 --- a/agent/moa_loop.py
 +++ b/agent/moa_loop.py
-@@ -119,6 +119,80 @@ _preset_cache_lock = threading.Lock()
+@@ -15,6 +15,7 @@ import logging
+ import re
+ import threading
+ import time
++import unicodedata
+ from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
+ from dataclasses import KW_ONLY, dataclass, replace
+ from types import SimpleNamespace
+@@ -119,6 +120,80 @@ _preset_cache_lock = threading.Lock()
  _preset_cache: dict[tuple, Any] = {}
  
  
@@ -304,7 +312,7 @@ index d0f9a05db..3599bdd67 100644
  def _resolve_preset_cached(preset_name: str) -> tuple[dict[str, Any], Any]:
      """``(preset, raw moa config)``; the resolved preset is cached per config file signature
      (skips resolve_moa_preset's full validation of the moa block on every create())."""
-@@ -151,6 +225,13 @@ _RUNTIME_CACHE_TTL_SECONDS = 300.0
+@@ -151,6 +226,13 @@ _RUNTIME_CACHE_TTL_SECONDS = 300.0
  # Cap on concurrent reference calls (guards pathologically large presets).
  _MAX_REFERENCE_WORKERS = 8
  
@@ -318,7 +326,7 @@ index d0f9a05db..3599bdd67 100644
  
  @dataclass(slots=True)
  class _RefAccounting:
-@@ -168,6 +249,11 @@ class _RefAccounting:
+@@ -168,6 +250,16 @@ class _RefAccounting:
      _: KW_ONLY
      messages: Any = None
      output: str | None = None
@@ -327,10 +335,15 @@ index d0f9a05db..3599bdd67 100644
 +    # to the aggregator (None = advisor untouched by the scrubber).
 +    scrub_removed: int | None = None
 +    scrub_marked: int | None = None
++    # Per-advisor provenance-check counts from Stage B (``_check_verified_quotes``).
++    # Unlike scrub counts, Stage B always writes these (checked includes 0) so a
++    # downgrade share stays measurable; None = Stage B never ran for this slot.
++    verified_checked: int | None = None
++    verified_downgraded: int | None = None
      model: str | None = None
      provider: str | None = None
      temperature: Any = None
-@@ -208,6 +294,17 @@ _REFERENCE_SYSTEM_PROMPT = (
+@@ -208,6 +300,17 @@ _REFERENCE_SYSTEM_PROMPT = (
      "tools or access. Your response is private guidance handed to the "
      "aggregator, not an answer shown to the user. NEVER claim to have executed "
      "anything."
@@ -348,7 +361,7 @@ index d0f9a05db..3599bdd67 100644
  )
  
  
-@@ -743,6 +840,162 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
+@@ -743,6 +846,345 @@ def _join_reference_outputs(outputs: list[tuple[str, str, Any]], degraded: str =
      return joined
  
  
@@ -386,6 +399,189 @@ index d0f9a05db..3599bdd67 100644
 +    r"""^\s*["{\[(]\s*"?[\w .-]+"?\s*[:=]"""  # {"key": / {'key': / [key= / (key:
 +)
 +_REMOVED_TOOL_CLAIM_NOTE = "[removed unverified tool-output claim]"
++
++
++# ── Stage B: provenance contract as checkable schema ────────────────────
++# A VERIFIED bullet must carry a quote that is a real substring of the advisory
++# view. Bullets without one are relabeled INFERRED (never deleted — P1).
++# Pure functions, no I/O, no module globals (per-call memo dicts only).
++_MIN_QUOTE_CHARS = 12
++# NOTE (calibration 2026-09-19, replay over 252 traces): tokens gate at 1, not
++# 2. The 2-token rule downgraded honest single-token evidence (paths, IDs —
++# all verbatim corpus hits); rate fell 57.9% -> 32.7% on 2->1 with no change
++# to no_quote detection. Length still gates at 12 chars. Presence-in-corpus
++# does the truthfulness work, not token count.
++_MIN_QUOTE_TOKENS = 1
++
++_QUOTE_FOLD_TABLE = str.maketrans({
++    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
++    "\u00ab": '"', "\u00bb": '"',
++    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u2032": "'",
++})
++
++_QUOTED_PAIR_RES = (
++    re.compile(r"\"((?:[^\"\\]|\\.)+)\""),
++    re.compile(r"'((?:[^'\\]|\\.)+)'"),
++    re.compile(r"`((?:[^`\\]|\\.)+)`"),
++)
++
++_UNVERIFIED_BANNER = (
++    "[UNVERIFIED-CLAIM, no verbatim quote from the transcript"
++    " — treated as inference]"
++)
++_TRUNCATION_BANNER = (
++    "[UNVERIFIED-CLAIM, quote crosses a truncation boundary"
++    " — treated as inference]"
++)
++_TRUNCATION_MARKER_RE = re.compile(r"\[\.\.\. \d+ chars omitted \.\.\.]")
++_HEADING_REST_RE = re.compile(r"^\s*(?:[-*+]\s+)?(?:verified|inferred):\s*", re.IGNORECASE)
++
++
++def _normalize_for_match(text: str) -> str:
++    """Fold text for exact-substring quote checks (pure, no I/O)."""
++    t = unicodedata.normalize("NFKC", str(text))
++    t = t.translate(_QUOTE_FOLD_TABLE)
++    t = t.replace("\r\n", "\n").replace("\r", "\n")
++    t = " ".join(t.split())
++    return t.casefold()
++
++
++def _extract_quotes(line: str) -> list[str]:
++    """Candidate quote spans in one line: paired markers (unescaped) plus a
++    fenced block opened on this line. An unbalanced marker is not a quote."""
++    if not isinstance(line, str) or not line:
++        return []
++    norm = _normalize_for_match(line)
++    # Unescape first: an advisor writing \"…\" still means a quote pair.
++    # Pairing on the raw form would read the backslash as escaping the
++    # delimiter and miss the pair entirely.
++    norm = norm.replace('\\"', '"').replace("\\'", "'")
++    m = re.match(r"^\s*```[^`]*$", norm)
++    if m:
++        # Fence opened here: the rest of the line is one candidate. (Fenced
++        # *content* on later lines is skipped by the caller as structural.)
++        body = norm[m.end():].strip()
++        return [body] if body else []
++    out: list[str] = []
++    for rx in _QUOTED_PAIR_RES:
++        for mm in rx.finditer(norm):
++            cand = (
++                mm.group(1)
++                .replace('\\"', '"')
++                .replace("\\'", "'")
++                .replace("``", "`")
++                .strip()
++            )
++            if cand:
++                out.append(cand)
++    return out
++
++
++def _check_verified_quotes(
++    text: str, context_text: str
++) -> tuple[str, int, int]:
++    """Relabel VERIFIED bullets whose quotes are not in the advisory view.
++
++    Returns ``(relabeled_text, downgraded, checked)``. INFERRED sections are
++    never touched; text without headings is returned untouched. One banner per
++    RUN of consecutive downgraded lines. A quote crossing the truncation seam
++    gets the distinct truncation banner. Fail-open: non-string input returns
++    ``(text, 0, 0)``.
++    """
++    if not isinstance(text, str) or not text:
++        return text, 0, 0
++    if not isinstance(context_text, str):
++        context_text = ""
++    norm_context = _normalize_for_match(context_text)
++    head, tail = norm_context, ""
++    seam = _TRUNCATION_MARKER_RE.search(norm_context)
++    if seam:
++        head, tail = norm_context[: seam.start()], norm_context[seam.end():]
++    memo: dict[str, str] = {}  # normalized quote -> "ok" | "seam" | "no"
++    lines = text.splitlines()
++    out: list[str] = []
++    downgraded = 0
++    checked = 0
++    section: str | None = None
++    pending: list[str] = []
++    pending_seam = False
++
++    def flush() -> None:
++        nonlocal pending, pending_seam
++        if pending:
++            out.append(_TRUNCATION_BANNER if pending_seam else _UNVERIFIED_BANNER)
++            out.extend(pending)
++            pending = []
++            pending_seam = False
++
++    def judge(claim_text: str) -> str:
++        """One VERIFIED claim -> "ok" | "seam" | "no" (memoized per call)."""
++        verdict = "no"
++        for q in _extract_quotes(claim_text):
++            nq = _normalize_for_match(q)
++            if len(nq) < _MIN_QUOTE_CHARS or len(nq.split()) < _MIN_QUOTE_TOKENS:
++                continue  # too_short: not evidence either way, keep looking
++            hit = memo.get(nq)
++            if hit is None:
++                if seam and _TRUNCATION_MARKER_RE.search(nq):
++                    hit = "seam"
++                elif nq in head or nq in tail:
++                    hit = "ok"
++                elif nq in norm_context:
++                    # Verbatim only because it stitches across omitted middle.
++                    hit = "seam" if seam else "ok"
++                else:
++                    hit = "no"
++                memo[nq] = hit
++            if hit == "ok":
++                return "ok"
++            if hit == "seam":
++                verdict = "seam"
++        return verdict
++
++    for line in lines:
++        stripped = line.strip()
++        low = _normalize_for_match(line)
++        if low.startswith("verified:") or low.startswith("inferred:"):
++            flush()
++            section = "VERIFIED" if low.startswith("verified:") else "INFERRED"
++            rest = _HEADING_REST_RE.sub("", line, count=1)
++            if section == "VERIFIED" and rest.strip():
++                # Heading carries its own claim (e.g. 'VERIFIED: "..."'):
++                # judge it inline so single-line VERIFIED statements count.
++                verdict = judge(_CLAIM_PREFIX_RE.sub("", rest, count=1))
++                if verdict == "ok":
++                    checked += 1
++                    out.append(line)
++                else:
++                    downgraded += 1
++                    out.append(
++                        _TRUNCATION_BANNER if verdict == "seam" else _UNVERIFIED_BANNER
++                    )
++                    out.append(line)
++            else:
++                out.append(line)
++            continue
++        if not stripped:
++            flush()
++            out.append(line)
++            continue
++        if section != "VERIFIED":
++            flush()
++            out.append(line)
++            continue
++        verdict = judge(_CLAIM_PREFIX_RE.sub("", line, count=1))
++        if verdict == "ok":
++            flush()
++            checked += 1
++            out.append(line)
++        else:
++            pending.append(line)
++            downgraded += 1
++            if verdict == "seam":
++                pending_seam = True
++    flush()
++    return "\n".join(out), downgraded, checked
 +
 +
 +def _scrub_unverified_tool_claims(text: str, context_text: str) -> tuple[str, int, int]:
@@ -511,7 +707,7 @@ index d0f9a05db..3599bdd67 100644
  def _sum_reference_accounting(outputs: list[tuple[str, str, Any]]) -> tuple[Any, Any]:
      """Sum fan-out usage AND cost in dollars (each advisor priced at its OWN rate)."""
      usage = CanonicalUsage()
-@@ -780,6 +1033,51 @@ def _guidance_inputs(
+@@ -780,6 +1222,77 @@ def _guidance_inputs(
      return agg_refs, _degraded_notice(failed_labels, policy), bool(reference_outputs) and not successful
  
  
@@ -535,22 +731,48 @@ index d0f9a05db..3599bdd67 100644
 +        )
 +        scrubbed: list[tuple[str, str, Any]] = []
 +        total_removed = total_marked = 0
++        total_checked = total_downgraded = 0
 +        per_advisor: list[str] = []
 +        for label, text, acct in reference_outputs:
++            # Stage A: cut naked tool fabrications, mark quoted ones.
 +            clean, removed, marked = _scrub_unverified_tool_claims(text, context_text)
 +            total_removed += removed
 +            total_marked += marked
++            # Stage B: relabel VERIFIED bullets whose quotes are not in the
++            # advisory view. Runs on the scrubbed text (what the aggregator
++            # will actually see); never deletes (P1), only relabels.
++            final, downgraded, checked = _check_verified_quotes(clean, context_text)
++            total_checked += checked
++            total_downgraded += downgraded
 +            if removed or marked:
 +                per_advisor.append(f"{label}: removed={removed} marked={marked}")
-+                if isinstance(acct, _RefAccounting):
-+                    # Ride the counts on the accounting object so the trace (which
-+                    # reads acct fields) can audit per-advisor scrub impact.
-+                    acct = replace(acct, scrub_removed=removed, scrub_marked=marked)
-+            scrubbed.append((label, clean, acct))
++            if downgraded or checked:
++                per_advisor.append(
++                    f"{label}: verified_checked={checked} verified_downgraded={downgraded}"
++                )
++            if isinstance(acct, _RefAccounting):
++                # Ride the counts on the accounting object so the trace (which
++                # reads acct fields) can audit per-advisor scrub impact.
++                # Stage B always writes (checked includes 0) so the downgrade
++                # share stays measurable; scrub keeps its touch-only convention.
++                updates: dict[str, Any] = {
++                    "verified_checked": checked,
++                    "verified_downgraded": downgraded,
++                }
++                if removed or marked:
++                    updates["scrub_removed"] = removed
++                    updates["scrub_marked"] = marked
++                acct = replace(acct, **updates)
++            scrubbed.append((label, final, acct))
 +        if total_removed or total_marked:
 +            logger.warning(
 +                "MoA scrubbed unverified tool claims in advisor outputs: removed=%d marked=%d (%s)",
 +                total_removed, total_marked, "; ".join(per_advisor),
++            )
++        if total_checked or total_downgraded:
++            logger.warning(
++                "MoA provenance quote check: verified_checked=%d verified_downgraded=%d (%s)",
++                total_checked, total_downgraded, "; ".join(per_advisor),
 +            )
 +        return scrubbed, total_removed, total_marked
 +    except Exception as exc:  # pragma: no cover - fail-open, never break a turn
@@ -563,7 +785,7 @@ index d0f9a05db..3599bdd67 100644
  def aggregate_moa_context(
      *, user_prompt: str, api_messages: list[dict[str, Any]], reference_models: list[dict[str, Any]],
      aggregator: dict[str, Any], temperature: float | None = None, aggregator_temperature: float | None = None,
-@@ -810,6 +1108,15 @@ def aggregate_moa_context(
+@@ -810,6 +1323,15 @@ def aggregate_moa_context(
      except Exception:  # pragma: no cover - privacy filter must never break a turn
          logger.debug("MoA privacy filter check failed", exc_info=True)
      agg_refs, degraded, all_failed = _guidance_inputs(reference_outputs, privacy_full, degraded_reference_policy)
@@ -579,7 +801,7 @@ index d0f9a05db..3599bdd67 100644
      joined = _join_reference_outputs(agg_refs, degraded)
      if all_failed:
          # Skip the aggregator: synthesizing over nothing can block for the full provider timeout.
-@@ -947,6 +1254,14 @@ class MoAChatCompletions:
+@@ -947,6 +1469,14 @@ class MoAChatCompletions:
          self.preset_name = preset_name or "default"
          self.reference_callback = reference_callback
          self._agent = agent
@@ -594,7 +816,7 @@ index d0f9a05db..3599bdd67 100644
          # Reference cache keyed on the advisory-view signature (HIT = no re-run, no re-emit).
          self._ref_cache_key: tuple | None = None
          self._ref_cache_outputs: list[tuple[str, str, Any]] = []
-@@ -966,6 +1281,7 @@ class MoAChatCompletions:
+@@ -966,6 +1496,7 @@ class MoAChatCompletions:
          self._fanout_iteration_count = 0
          self._fanout_turn_sig: str | None = None
          self._fanout_last_state_sig: str | None = None
@@ -602,7 +824,7 @@ index d0f9a05db..3599bdd67 100644
          self._privacy_mode: str = ""  # normalized moa.privacy_filter, refreshed per create()
  
      def consume_reference_usage(self) -> tuple[Any, Any]:
-@@ -1020,6 +1336,7 @@ class MoAChatCompletions:
+@@ -1020,6 +1551,7 @@ class MoAChatCompletions:
                  aggregator_provider=agg_slot.get("provider"), aggregator_temperature=pending.get("aggregator_temperature"),
                  aggregator_input_messages=pending.get("aggregator_input_messages"),
                  aggregator_output=agg_output, aggregator_streamed=bool(pending.get("aggregator_streamed")),
@@ -610,7 +832,7 @@ index d0f9a05db..3599bdd67 100644
              )
          except Exception as exc:  # pragma: no cover - tracing must never break a turn
              logger.debug("MoA trace flush failed: %s", exc)
-@@ -1032,10 +1349,10 @@ class MoAChatCompletions:
+@@ -1032,10 +1564,10 @@ class MoAChatCompletions:
          except Exception as exc:  # pragma: no cover - display must never break the turn
              logger.debug("MoA reference_callback failed for %s: %s", event, exc)
  
@@ -623,7 +845,7 @@ index d0f9a05db..3599bdd67 100644
  
      def rebase_prepared_request(self, prepared: dict[str, Any], messages: list[dict[str, Any]]) -> dict[str, Any]:
          """Re-attach already-generated guidance to a rebuilt (compressed) transcript."""
-@@ -1043,6 +1360,7 @@ class MoAChatCompletions:
+@@ -1043,6 +1575,7 @@ class MoAChatCompletions:
          agg_messages = [dict(message) for message in messages]
          if guidance:
              _attach_reference_guidance(agg_messages, str(guidance))
@@ -631,7 +853,7 @@ index d0f9a05db..3599bdd67 100644
          return {**prepared, "messages": agg_messages}
  
      def _plan_aggregator_cache(
-@@ -1179,6 +1497,7 @@ class MoAChatCompletions:
+@@ -1179,6 +1712,7 @@ class MoAChatCompletions:
                  self._fanout_turn_sig = turn_sig
                  self._fanout_iteration_count = 0
                  self._fanout_last_state_sig = None
@@ -639,7 +861,7 @@ index d0f9a05db..3599bdd67 100644
              state_sig = _hash_messages(ref_messages)
              if state_sig != self._fanout_last_state_sig:
                  self._fanout_last_state_sig = state_sig
-@@ -1186,6 +1505,11 @@ class MoAChatCompletions:
+@@ -1186,6 +1720,11 @@ class MoAChatCompletions:
              # Iteration 1 is on-cadence; then every Nth iteration after it.
              if (self._fanout_iteration_count - 1) % every_n != 0 and self._ref_cache_outputs:
                  return self._ref_cache_key
@@ -651,7 +873,7 @@ index d0f9a05db..3599bdd67 100644
  
          return (self.preset_name, _hash_messages(sig_messages), tuple(_slot_label(s) for s in reference_models))
  
-@@ -1195,12 +1519,18 @@ class MoAChatCompletions:
+@@ -1195,12 +1734,18 @@ class MoAChatCompletions:
      ) -> list[tuple[str, str, Any]]:
          """Cache-MISS path of ``create``: run the advisors, account, trace and emit.
  
@@ -672,7 +894,7 @@ index d0f9a05db..3599bdd67 100644
  
              progress_callback=lambda done, total, label: self._emit("moa.progress", refs_done=done, refs_total=total, label=label),
              reference_timeout=float(raw_reference_timeout) if raw_reference_timeout else None,
-@@ -1209,6 +1539,11 @@ class MoAChatCompletions:
+@@ -1209,6 +1754,11 @@ class MoAChatCompletions:
          # An interrupted fan-out is a partial snapshot: never cache it (a HIT would
          # replay placeholder notes every iteration).
          interrupted = any(text == _INTERRUPTED_REFERENCE_NOTE for _lbl, text, _acct in reference_outputs)
@@ -684,7 +906,7 @@ index d0f9a05db..3599bdd67 100644
          self._ref_cache_key = None if interrupted else cache_key
          self._ref_cache_outputs = [] if interrupted else list(reference_outputs)
          # Fold advisor spend into accounting exactly once per turn.
-@@ -1220,9 +1555,12 @@ class MoAChatCompletions:
+@@ -1220,9 +1770,12 @@ class MoAChatCompletions:
              (label, _redact_reference_text(text), _redact_trace_accounting(acct)) for label, text, acct in reference_outputs
          ] if privacy_mode else list(reference_outputs)
          self._pending_trace = {
@@ -698,7 +920,7 @@ index d0f9a05db..3599bdd67 100644
          # Derived from the privacy-redacted trace_refs.
          try:
              from agent.moa_trace import slot_metrics
-@@ -1278,6 +1616,9 @@ class MoAChatCompletions:
+@@ -1278,6 +1831,9 @@ class MoAChatCompletions:
                  f"References: {', '.join(label for label, _, _ in agg_refs)}\n\n"
                  "Use the reference responses below as private context. You are the aggregator and acting model: "
                  "answer the user directly or call tools as needed.\n\n"
@@ -708,7 +930,7 @@ index d0f9a05db..3599bdd67 100644
                  f"{_join_reference_outputs(agg_refs, degraded)}"
              )
          return None
-@@ -1293,6 +1634,111 @@ class MoAChatCompletions:
+@@ -1293,6 +1849,111 @@ class MoAChatCompletions:
          # Remembered on self so _call_prepared_aggregator redacts the trace consistently.
          self._privacy_mode = _moa_privacy_mode(moa_raw)
          messages = list(api_kwargs.get("messages") or [])
@@ -820,7 +1042,7 @@ index d0f9a05db..3599bdd67 100644
          # A disabled preset = "use the aggregator directly".
          reference_models = [
              slot for slot in (preset.get("reference_models") or []) if slot.get("enabled", True)
-@@ -1324,6 +1770,12 @@ class MoAChatCompletions:
+@@ -1324,6 +1985,12 @@ class MoAChatCompletions:
          prepared_request = {
              "messages": agg_messages, "guidance": guidance, "aggregator": aggregator,
              "aggregator_temperature": aggregator_temperature,
@@ -833,7 +1055,7 @@ index d0f9a05db..3599bdd67 100644
          }
          if api_kwargs.pop("_moa_prepare_only", False):
              return prepared_request
-@@ -1359,6 +1811,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
+@@ -1359,6 +2026,8 @@ _RELAY_EVENTS: dict[str, tuple[str, str | None, dict[str, str]]] = {
      "moa.progress": ("label", None, {"moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.phase": ("aggregator", None, {"moa_phase": "phase", "moa_refs_done": "refs_done", "moa_refs_total": "refs_total"}),
      "moa.aggregating": ("aggregator", None, {"moa_ref_count": "ref_count"}),
@@ -843,10 +1065,10 @@ index d0f9a05db..3599bdd67 100644
  
  
 diff --git a/agent/moa_trace.py b/agent/moa_trace.py
-index 06eb962dc..92893da71 100644
+index 06eb962dc..3d5ee8fd4 100644
 --- a/agent/moa_trace.py
 +++ b/agent/moa_trace.py
-@@ -49,13 +49,24 @@ _ACCT_FIELDS = ("model", "provider", "temperature")
+@@ -49,13 +49,31 @@ _ACCT_FIELDS = ("model", "provider", "temperature")
  _COST_FIELDS = ("cost_usd", "cost_status", "cost_source")
  
  
@@ -860,6 +1082,9 @@ index 06eb962dc..92893da71 100644
 +    said, pre-scrub). ``guidance_output`` is the text the aggregator was actually
 +    handed after the anti-fabrication scrub, and ``scrub`` carries the per-advisor
 +    removed/marked counts, so the intervention is auditable from the trace alone.
++    ``verified`` carries the Stage B provenance-quote counts (checked always
++    written, including 0, so the downgrade share stays measurable). It lives in
++    its own key so the ``scrub`` shape stays stable.
 +    """
      usage = getattr(acct, "usage", None)
      return {
@@ -870,10 +1095,14 @@ index 06eb962dc..92893da71 100644
 +            "removed": getattr(acct, "scrub_removed", None),
 +            "marked": getattr(acct, "scrub_marked", None),
 +        },
++        "verified": {
++            "checked": getattr(acct, "verified_checked", None),
++            "downgraded": getattr(acct, "verified_downgraded", None),
++        },
          "usage": {f: getattr(usage, f, 0) for f in _USAGE_FIELDS} if usage is not None else {},
          **{f: getattr(acct, f, None) for f in _COST_FIELDS},
      }
-@@ -76,7 +87,7 @@ def save_moa_turn(
+@@ -76,7 +94,7 @@ def save_moa_turn(
      *, session_id: Optional[str], preset_name: str, reference_outputs: list[tuple[str, str, Any]],
      aggregator_label: str, aggregator_model: Optional[str], aggregator_provider: Optional[str],
      aggregator_temperature: Any, aggregator_input_messages: Any, aggregator_output: Optional[str],
@@ -882,7 +1111,7 @@ index 06eb962dc..92893da71 100644
  ) -> None:
      """Append one full MoA turn record to the session's trace JSONL, if enabled.
  
-@@ -101,7 +112,7 @@ def save_moa_turn(
+@@ -101,7 +119,7 @@ def save_moa_turn(
              "ts": time.time(),
              "session_id": session_id,
              "preset": preset_name,
@@ -891,7 +1120,7 @@ index 06eb962dc..92893da71 100644
              "aggregator": {
                  "label": aggregator_label, "model": aggregator_model,
                  "provider": aggregator_provider, "temperature": aggregator_temperature,
-@@ -109,6 +120,8 @@ def save_moa_turn(
+@@ -109,6 +127,8 @@ def save_moa_turn(
                  "streamed": aggregator_streamed, "output_location": output_location,
              },
          }
@@ -1275,10 +1504,10 @@ index 000000000..023369cc4
 \ No newline at end of file
 diff --git a/tests/agent/test_moa_auto_runtime.py b/tests/agent/test_moa_auto_runtime.py
 new file mode 100644
-index 000000000..0c16a430b
+index 000000000..40937cf68
 --- /dev/null
 +++ b/tests/agent/test_moa_auto_runtime.py
-@@ -0,0 +1,1287 @@
+@@ -0,0 +1,1408 @@
 +from __future__ import annotations
 +
 +import json
@@ -2566,6 +2795,127 @@ index 000000000..0c16a430b
 +        messages=[{"role": "user", "content": "second, unrelated"}],
 +    )
 +    assert len(ref_runs) == 5
++
++# ---- Stage B provenance quote check (Tasks 1-2 + threshold decision 12,1) ----
++
++
++_CTX = 'пользователь: исправь парсер\n[tool result: {"output": "ok"}]\nассистент: готово'
++
++
++def test_normalize_for_match_folds_quotes_whitespace_and_case():
++    from agent.moa_loop import _normalize_for_match
++
++    assert _normalize_for_match('«Он  Сказал»\r\n\t"Готово"') == '"он сказал" "готово"'
++
++
++def test_extract_quotes_reads_paired_markers_and_unescapes():
++    from agent.moa_loop import _extract_quotes
++
++    bs = chr(92)  # backslash without source-level escaping games
++    line = "VERIFIED: " + bs + '"exit_code: 0' + bs + '" done'
++    assert any("exit_code: 0" in q for q in _extract_quotes(line))
++
++
++def test_extract_quotes_ignores_unbalanced_marker():
++    from agent.moa_loop import _extract_quotes
++
++    assert _extract_quotes('VERIFIED: "цитата без закрывающей кавычки') == []
++
++
++def test_verified_bullet_with_real_quote_is_untouched():
++    from agent.moa_loop import _check_verified_quotes
++
++    text = 'VERIFIED: в транскрипте есть "исправь парсер".\nINFERRED: вероятно, дело в кавычках [uncertain].'
++    assert _check_verified_quotes(text, _CTX) == (text, 0, 1)
++
++
++def test_verified_paraphrase_is_downgraded_but_kept():
++    from agent.moa_loop import _check_verified_quotes
++
++    text = "VERIFIED: пользователь просит починить парсер."
++    out, downgraded, checked = _check_verified_quotes(text, _CTX)
++    assert (downgraded, checked) == (1, 0)
++    assert "починить парсер" in out  # P1: текст сохранён
++    assert "[UNVERIFIED-CLAIM" in out
++
++
++def test_verified_quote_from_own_words_is_downgraded():
++    """Цитата реальна, но её нет в транскрипте — только в самом ответе советника."""
++    from agent.moa_loop import _check_verified_quotes
++
++    text = 'VERIFIED: "кэш агрегатора был холодным".'
++    out, downgraded, _ = _check_verified_quotes(text, _CTX)
++    assert downgraded == 1 and "кэш агрегатора" in out
++
++
++def test_inferred_section_is_never_touched():
++    from agent.moa_loop import _check_verified_quotes
++
++    text = "INFERRED: без цитаты, так и должно быть [uncertain]."
++    assert _check_verified_quotes(text, _CTX) == (text, 0, 0)
++
++
++def test_no_headings_means_no_opinion():
++    from agent.moa_loop import _check_verified_quotes
++
++    text = "Просто совет без секций."
++    assert _check_verified_quotes(text, _CTX) == (text, 0, 0)
++
++
++def test_truncation_seam_quote_is_labeled_distinctly():
++    from agent.moa_loop import _check_verified_quotes
++
++    ctx = "начало\n[... 900 chars omitted ...]\nконец"
++    seam = 'VERIFIED: "начало [... 900 chars omitted ...] конец"'
++    out, downgraded, _ = _check_verified_quotes(seam, ctx)
++    assert downgraded == 1 and "truncation boundary" in out
++
++
++def test_fail_open_on_non_string():
++    from agent.moa_loop import _check_verified_quotes
++
++    assert _check_verified_quotes(None, _CTX) == (None, 0, 0)
++
++
++def test_single_token_verbatim_quote_checks():
++    """Calibration (12,1): a long single-token quote is evidence, not a downgrade."""
++    from agent.moa_loop import _check_verified_quotes
++
++    text = 'VERIFIED: путь "claude_desktop_config.json" проверен.'
++    out, downgraded, checked = _check_verified_quotes(
++        text, "конфиг лежит в claude_desktop_config.json рядом"
++    )
++    assert (downgraded, checked) == (0, 1)
++
++
++def test_scrub_reference_outputs_runs_quote_check_after_tool_claim_scrub():
++    from agent.moa_loop import CanonicalUsage, _RefAccounting, _scrub_reference_outputs
++
++    acct = _RefAccounting(usage=CanonicalUsage())
++    outputs = [
++        (
++            "nous:test/free",
++            'VERIFIED: есть "исправь парсер".\nVERIFIED: пользователь просит починить парсер.',
++            acct,
++        )
++    ]
++    scrubbed, removed, marked = _scrub_reference_outputs(
++        outputs, [{"role": "user", "content": "пользователь: исправь парсер"}]
++    )
++    assert (removed, marked) == (0, 0)
++    assert scrubbed[0][2].verified_checked == 1
++    assert scrubbed[0][2].verified_downgraded == 1
++
++
++def test_trace_slot_records_verified_quote_counts():
++    from agent.moa_loop import CanonicalUsage, _RefAccounting
++    from agent.moa_trace import _slot_trace
++
++    acct = _RefAccounting(
++        usage=CanonicalUsage(), output="x", verified_checked=2, verified_downgraded=1
++    )
++    rec = _slot_trace(acct, "nous:test/free", "y")
++    assert rec["verified"] == {"checked": 2, "downgraded": 1}
 diff --git a/tests/hermes_cli/test_moa_cmd_auto.py b/tests/hermes_cli/test_moa_cmd_auto.py
 new file mode 100644
 index 000000000..8781db710
