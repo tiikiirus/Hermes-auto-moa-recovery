@@ -24,7 +24,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: upstage/solar-pro4:free
+        model: stealth/space-bunny-alpha
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
@@ -70,7 +70,7 @@ moa:
         model: poolside/laguna-s-2.1:free
         reasoning_effort: medium
       - provider: nous
-        model: poolside/laguna-xs-2.1:free
+        model: stealth/space-bunny-alpha
         reasoning_effort: medium
       - provider: nous
         model: inclusionai/ling-3.0-flash-fin:free
@@ -122,7 +122,7 @@ moa:
       enabled: true
       reference_models: &moa_pay_refs
       - provider: nous
-        model: inclusionai/ling-3.0-flash-fin:free
+        model: stealth/space-bunny-alpha
         reasoning_effort: medium
       - provider: nous
         model: stepfun/step-3.7-flash:free

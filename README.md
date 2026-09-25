@@ -130,6 +130,8 @@ Free-модели Nous — ротация промо, не контракт: `te
 
 Аудит пресетов 10.09.2026 (`tools/moa_preset_audit_apply.py`): убран ключ `max_tokens` — его не читает `_normalize_preset` (распознаётся только `reference_max_tokens`), поэтому агрегатор на самом деле никогда не был ограничен по выводу; на free-пресетах задан `reference_timeout: 240` вместо наследуемых `auxiliary.moa_reference.timeout` = 900 с (свободный flash-советник мог держать ход 15 минут); `degraded_reference_policy: loud` прописан явно. `fanout` намеренно не трогали: `every_n:3` остаётся только у mxstat через `profile_overrides` (NEWLOG-704).
 
+Ревью пресетов 25.09.2026 (3 ревьюера): `stealth/space-bunny-alpha` ($0, 1M контекст, семья stealth) — 4-я семья советников: `code_logic_deep` (убрано пересечение советник/агрегатор `solar`/`solar`), `code_visual_deep` (заменён дубль `laguna-xs`), `pay_default` (замена `fin`, разгрузка free-пула); везде swap 3→3, без 4-х слотов. `sante:free` — холодный запасной для `fin`, не развёрнут. `longcat-2.0:free` умер (404) → ротирован в `solar-pro4:free`.
+
 ### Мониторинг и ротация
 
 ```powershell
