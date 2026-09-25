@@ -121,7 +121,7 @@ Free-модели Nous — ротация промо, не контракт: `te
 
 | Пресет | Агрегатор | Падение модели → сломано пресетов |
 |---|---|---|
-| `default`, `logic_deep`, `code_logic_deep` | `meituan/longcat-2.0:free` | longcat умрёт → 3 |
+| `default`, `logic_deep`, `code_logic_deep` | `upstage/solar-pro4:free` | solar умрёт → 3 |
 | `code_visual_deep`, `logic_visual_deep` | `stepfun/step-3.7-flash:free` | step умрёт → 2 |
 
 Аудит 10.09.2026 свёл `code_logic_deep` к каноническому free-агрегатору (раньше он один держал `laguna-s-2.1`), поэтому распределение стало 3/2 вместо 2/1/2: концентрация на longcat выросла. Если важнее разнести единую точку отказа, верните `code_logic_deep` отдельный агрегатор — ценой того, что free-роутер снова будет давать на code-ходы не тот агрегатор, что у `free_auto_moa`.

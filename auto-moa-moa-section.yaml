@@ -14,7 +14,7 @@ moa:
         reasoning_effort: medium
       aggregator: &moa_default_agg
         provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: high
       reference_max_tokens: 2048
       reference_timeout: 240
@@ -24,7 +24,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
@@ -34,7 +34,7 @@ moa:
         reasoning_effort: medium
       aggregator:
         provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: high
       reference_max_tokens: 2048
       reference_timeout: 240
@@ -54,7 +54,7 @@ moa:
         reasoning_effort: medium
       aggregator:
         provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: high
       reference_max_tokens: 2048
       reference_timeout: 240
@@ -64,7 +64,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
@@ -93,7 +93,7 @@ moa:
         model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: medium
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: medium
       aggregator:
         provider: nous
@@ -141,7 +141,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-xs-2.1:free
@@ -179,7 +179,7 @@ moa:
       enabled: true
       reference_models:
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: medium
       - provider: nous
         model: poolside/laguna-s-2.1:free
@@ -207,7 +207,7 @@ moa:
         model: inclusionai/ling-3.0-flash-fin:free
         reasoning_effort: medium
       - provider: nous
-        model: meituan/longcat-2.0:free
+        model: upstage/solar-pro4:free
         reasoning_effort: medium
       aggregator:
         provider: nous
