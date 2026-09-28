@@ -192,6 +192,138 @@ def _verify_seals(repo: Path) -> list[Finding]:
     return findings
 
 
+# ── tooling integrity — sealed-set manifest (ADR 0002) ───────────────
+# The ledger answers "are our bytes what we sealed?" — nothing answered
+# "is this *all* that must be sealed?". _verify_seals walks SHA256SUMS.txt,
+# so a deleted (or malformed) line made the file it named silently unsealed.
+# SEALED_SET is that missing declaration, compiled into the verifier itself:
+# the verifier's own seal line is in it too, so the auditor's seal cannot
+# vanish quietly either. Invariant, pinned by test_kit_manifest_matches_ledger:
+# SEALED_SET == {s.path for s in sealed(kit root)} — exact, both directions.
+# Changing the sealed set therefore takes three deliberate acts: ledger line,
+# manifest entry, reseal. Foreign repos (tests build miniature recovery repos)
+# get no manifest; a caller may inject one via verify(expect_seals=...).
+
+SEALED_SET: frozenset = frozenset((  # noqa: C408
+    '.gitattributes',
+    'auto-moa-current.patch',
+    'auto-moa-hook.sh',
+    'auto-moa-moa-section.yaml',
+    'auto-moa-router-source-20260820.patch',
+    'auto-moa-watchdog.bat',
+    'check-moa-models.bat',
+    'check-moa-models.py',
+    'hermes-update.bat',
+    'install-auto-moa.bat',
+    'restore-auto-moa-after-update.bat',
+    'rotate-moa-model.bat',
+    'rotate-moa-model.py',
+    'run-moa-tests.bat',
+
+    'skills/anti-ai-slop/LICENSE',
+    'skills/anti-ai-slop/SKILL.md',
+    'skills/anti-ai-slop/assets/gates.svg',
+    'skills/anti-ai-slop/references/lexicon.md',
+    'skills/anti-ai-slop/references/patterns.md',
+    'skills/anti-ai-slop/references/reviewer.md',
+    'skills/anti-ai-slop/references/voice.md',
+    'skills/anti-ai-slop/scripts/credentials.py',
+    'skills/anti-ai-slop/scripts/detect.py',
+    'skills/anti-ai-slop/scripts/grade.py',
+    'skills/anti-ai-slop/scripts/rules.json',
+    'skills/anti-ai-slop/scripts/sanitize.py',
+    'skills/anti-ai-slop/scripts/slopcheck.py',
+    'skills/anti-ai-slop/tests/fixtures/clean.md',
+    'skills/anti-ai-slop/tests/fixtures/masking.md',
+    'skills/anti-ai-slop/tests/fixtures/slop.md',
+    'skills/anti-ai-slop/tests/fixtures/watermarked.md',
+    'skills/anti-ai-slop/tests/test_credentials.py',
+    'skills/anti-ai-slop/tests/test_grade.py',
+    'skills/anti-ai-slop/tests/test_slopcheck.py',
+    'skills/visual-explainer/.claude-plugin/plugin.json',
+    'skills/visual-explainer/LICENSE',
+    'skills/visual-explainer/SKILL.md',
+    'skills/visual-explainer/commands/diff-review.md',
+    'skills/visual-explainer/commands/fact-check.md',
+    'skills/visual-explainer/commands/generate-slides.md',
+    'skills/visual-explainer/commands/generate-visual-plan.md',
+    'skills/visual-explainer/commands/generate-web-diagram.md',
+    'skills/visual-explainer/commands/plan-review.md',
+    'skills/visual-explainer/commands/project-recap.md',
+    'skills/visual-explainer/extension.ts',
+    'skills/visual-explainer/mcp/README.md',
+    'skills/visual-explainer/mcp/server.mjs',
+    'skills/visual-explainer/pptx/README.md',
+    'skills/visual-explainer/pptx/export.mjs',
+    'skills/visual-explainer/quick/README.md',
+    'skills/visual-explainer/quick/base.css',
+    'skills/visual-explainer/quick/render.mjs',
+    'skills/visual-explainer/quick/schema.json',
+    'skills/visual-explainer/references/css-patterns.md',
+    'skills/visual-explainer/references/libraries.md',
+    'skills/visual-explainer/references/responsive-nav.md',
+    'skills/visual-explainer/references/slide-patterns.md',
+    'skills/visual-explainer/references/themes.md',
+    'skills/visual-explainer/templates/architecture.html',
+    'skills/visual-explainer/templates/data-table.html',
+    'skills/visual-explainer/templates/mermaid-flowchart.html',
+    'skills/visual-explainer/templates/slide-deck.html',
+
+    'tools/doctor.py',
+    'tools/fleet_consistency.py',
+    'tools/live_tree_check.py',
+    'tools/moa_preset_audit_apply.py',
+    'tools/moa_sync.py',
+    'tools/probes/moa_canary_monitor.py',
+    'tools/probes/moa_fanout_spend_projection.py',
+    'tools/probes/moa_provenance_replay.py',
+    'tools/probes/moa_scrub_outcome_correlation.py',
+    'tools/probes/moa_trace_toolclaim_scan.py',
+    'tools/recovery_integrity.py',
+    'tools/repair.py',
+    'tools/tests/test_cli_doctor.py',
+    'tools/tests/test_fleet_consistency.py',
+    'tools/tests/test_moa_sync_splice.py',
+    'tools/tests/test_patch_reexport.py',
+    'tools/tests/test_recovery_integrity.py',
+    'tools/tests/test_repair.py',
+))
+
+_KIT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _manifest_for(repo: Path) -> frozenset | None:
+    """Compiled-in manifest — only for the repository the verifier lives in."""
+    try:
+        if Path(repo).resolve() == _KIT_ROOT:
+            return SEALED_SET
+    except OSError:  # pragma: no cover — unresolvable path
+        return None
+    return None
+
+
+def _verify_seal_set(repo: Path, expect: frozenset | None) -> list[Finding]:
+    """Cross-check the ledger's path set against the manifest (both ways)."""
+    if expect is None:
+        return []
+    actual = frozenset(seal.path for seal in sealed(repo))
+    findings: list[Finding] = []
+    for path in sorted(expect - actual):
+        findings.append(
+            Finding("unsealed_path", "block", path, "in SEALED_SET but no ledger line — the seal vanished")
+        )
+    for path in sorted(actual - expect):
+        findings.append(
+            Finding(
+                "undeclared_seal",
+                "block",
+                path,
+                "ledger line without a SEALED_SET entry — trust base changed without a manifest edit",
+            )
+        )
+    return findings
+
+
 # ── live-tree noise — Task 4 (port of live_tree_check) ────────────
 
 def _live_status(live: Path) -> list[tuple[str, str]]:
@@ -329,13 +461,25 @@ def _verify_patch(repo: Path, live: Path, patch: Path | None = None) -> list[Fin
 
 # ── verify — Tasks 1-5 combined (pure read-only) ─────────────────────
 
-def verify(repo: Path, live: Path, patch: Path | None = None) -> Report:
-    """Pure read-only verifier — Tasks 1-5.
+def verify(
+    repo: Path,
+    live: Path,
+    patch: Path | None = None,
+    *,
+    expect_seals: frozenset | None = None,
+) -> Report:
+    """Pure read-only verifier — Tasks 1-5 + seal-set cross-check (ADR 0002).
 
     No file is written, no patch is applied (--check only). The invariants
     test_verify_writes_nothing / test_cross_check_writes_nothing pin this.
+
+    expect_seals overrides the sealed-set manifest. The default applies the
+    compiled-in SEALED_SET only to this kit's own repository and skips
+    foreign fixture repos (see _manifest_for).
     """
     findings: list[Finding] = []
+    manifest = _manifest_for(Path(repo)) if expect_seals is None else frozenset(expect_seals)
+    findings.extend(_verify_seal_set(Path(repo), manifest))
     findings.extend(_verify_seals(Path(repo)))
     findings.extend(_verify_live_tree_noise(Path(live)))
     findings.extend(_verify_patch(Path(repo), Path(live), patch))

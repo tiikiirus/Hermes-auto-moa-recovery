@@ -97,9 +97,10 @@ def repair(report: Report, repo: Path, live: Path, patch: Path | None = None) ->
     """Apply repair for the byte_integrity findings in report.
 
     Pure dispatcher: each finding is handled independently, never aborts the
-    loop on a single failure. Fleet findings are skipped, patch_drift is
-    refused (requires re-export), stale_seal is resealed, tracked live_tree_noise
-    is reverted via git checkout, untracked is skipped.
+    loop on a single failure. Fleet findings are skipped, patch_drift and
+    undeclared_seal are refused (need a re-export / a manifest edit), stale_seal
+    and unsealed_path are resealed, tracked live_tree_noise is reverted via
+    git checkout, untracked is skipped.
     """
     repo = Path(repo)
     live = Path(live)
@@ -131,6 +132,24 @@ def repair(report: Report, repo: Path, live: Path, patch: Path | None = None) ->
 
             if f.flavour == "missing_seal":
                 # No file to reseal from — refuse, surface distinctly
+                refused.append(f)
+                continue
+
+            if f.flavour == "unsealed_path":
+                # Manifest entry whose ledger line is gone (ADR 0002): the
+                # bytes may still be intact, so reseal is exactly the repair.
+                # A missing file falls through to refused via _reseal_one.
+                rel = f.path or ""
+                if not rel:
+                    refused.append(f)
+                    continue
+                ok = _reseal_one(repo, rel)
+                (repaired if ok else refused).append(f)
+                continue
+
+            if f.flavour == "undeclared_seal":
+                # Trust base lives in the manifest (code): fixing this needs
+                # an SEALED_SET edit + reseal, never a ledger-only writer.
                 refused.append(f)
                 continue
 

@@ -295,3 +295,54 @@ def test_patch_check_is_read_only_and_uses_correct_cwd(tmp_path):
     # so an a/b prefixed diff must succeed when live is the cwd.
     (live / "agent" / "moa_loop.py").write_text("patched\n", encoding="utf-8", newline="")
     assert ri.verify(repo=make_recovery(tmp_path), live=live, patch=patch).findings == ()
+
+
+# ── tooling integrity: sealed-set manifest (ADR 0002) ───────────────
+
+
+def test_manifest_missing_ledger_line_blocks(tmp_path):
+    """A manifest entry without a ledger line = a silently unsealed file."""
+    repo, live = make_recovery(tmp_path), make_live(tmp_path)
+    expect = frozenset({"tools/sealed_tool.py", "tools/gone.py"})
+    report = ri.verify(repo=repo, live=live, expect_seals=expect)
+    assert [f.flavour for f in report.findings] == ["unsealed_path"]
+    assert report.findings[0].path == "tools/gone.py"
+    assert report.blocked and report.exit_code() == 1
+
+
+def test_manifest_extra_ledger_line_blocks(tmp_path):
+    """A ledger line without a manifest entry = trust base changed silently."""
+    repo, live = make_recovery(tmp_path), make_live(tmp_path)
+    report = ri.verify(repo=repo, live=live, expect_seals=frozenset())
+    assert [f.flavour for f in report.findings] == ["undeclared_seal"]
+    assert report.findings[0].path == "tools/sealed_tool.py"
+    assert report.blocked
+
+
+def test_manifest_skipped_for_foreign_repo(tmp_path):
+    """Fixture repos get no compiled-in manifest — only explicit injection applies."""
+    repo, live = make_recovery(tmp_path), make_live(tmp_path)
+    assert ri.verify(repo=repo, live=live).findings == ()
+
+
+def test_manifest_check_writes_nothing(tmp_path):
+    """Like every other zone: the cross-check is read-only."""
+    repo, live = make_recovery(tmp_path), make_live(tmp_path)
+    before = {p: p.read_bytes() for p in sorted(tmp_path.rglob("*")) if p.is_file() and ".git" not in p.parts}
+    ri.verify(repo=repo, live=live, expect_seals=frozenset())
+    after = {p: p.read_bytes() for p in sorted(tmp_path.rglob("*")) if p.is_file() and ".git" not in p.parts}
+    assert before == after
+
+
+def test_kit_manifest_matches_ledger():
+    """The kit's invariant: SEALED_SET == ledger path set, exact both ways.
+
+    Catches both drift directions before verify() even runs: a file sealed
+    without a manifest entry, or a manifest entry without a ledger line.
+    Also pins that the verifier's own seal line and the seal unit
+    declaration (.gitattributes) are part of the trust base.
+    """
+    ledger_paths = frozenset(s.path for s in ri.sealed(ri._KIT_ROOT))
+    assert ri.SEALED_SET == ledger_paths
+    assert "tools/recovery_integrity.py" in ri.SEALED_SET  # the auditor seals itself
+    assert ".gitattributes" in ri.SEALED_SET  # defines the seal unit

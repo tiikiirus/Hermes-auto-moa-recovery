@@ -15,7 +15,7 @@ never committed: the diff against upstream HEAD **is** the patch source.
 (the `default` profile) or `%LOCALAPPDATA%\hermes\profiles\<name>\config.yaml`.
 
 **Fleet** — the live profiles together: `default`, `mxstat`, `fantrax`, `aiqa`,
-`auto-moa`, `dynasty` (added 2026-09-25 ? an active MoA profile that existed
+`auto-moa`, `dynasty` (added 2026-09-25 — an active MoA profile that existed
 outside the gate until its graph drifted), plus `local-llm-lab`, which is a
 profile but *not* a MoA profile. `moa_sync.PROFILE_PATHS` is the single
 declaration of the fleet; `fleet_consistency` derives its name set from it.
@@ -46,20 +46,26 @@ and be broken in a clone.
 
 **The sealed set** — runtime and restore-critical bytes: the recovery patch, the
 canon, the wrapper scripts (`.bat` / `.sh`) and the tools. Documentation and meta
-files (`README.md`, `USER_GUIDE_RU.txt`, `.gitattributes`, `SHA256SUMS.txt`) sit
-deliberately outside the seal, so a docs edit never carries reseal churn.
+files (`README.md`, `USER_GUIDE_RU.txt`, `SHA256SUMS.txt`) sit deliberately outside
+the seal, so a docs edit never carries reseal churn. The set itself is declared
+twice on purpose — as the ledger and as `recovery_integrity.SEALED_SET` — and
+`verify()` cross-checks the two, because a lost ledger line used to unseal a file
+silently (`.gitattributes`, which defines the seal unit, is inside the seal).
+See [ADR 0002](docs/adr/0002-sealing-the-sealer.md).
 
 **Reseal** — recompute and record a seal after an intended change. It only ever
 follows an intended change.
 
-**Drift** — reality and intent disagree. Three flavours, each with its own repair:
+**Drift** — reality and intent disagree. Four flavours, each with its own repair:
 
 - **stale seal** — a sealed artifact changed without a reseal;
+- **seal-set drift** — the ledger and `SEALED_SET` disagree about *what* is
+  sealed (a lost line is resealed; an undeclared line needs a manifest edit);
 - **live-tree noise** — a path outside the patch scope is dirty;
 - **patch drift** — the patch no longer reverse-applies, so the live tree and the
   export disagree about the same nine paths.
 
-**Verify** — `verify()` reports drift graded by flavour. The three flavours above
+**Verify** — `verify()` reports drift graded by flavour. The four flavours above
 **block** (non-zero exit); unknown-but-harmless details warn.
 
 **Check and repair** — `--check` reads and never writes, and it is the flavour that

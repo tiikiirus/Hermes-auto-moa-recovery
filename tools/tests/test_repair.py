@@ -176,3 +176,33 @@ def test_repair_does_not_abort_on_first_unrepairable(tmp_path):
     result = repair(report, repo, live)
     assert any(f.flavour == "stale_seal" for f in result.repaired)
     assert any(f.flavour == "missing_seal" for f in result.refused)
+
+
+# ── ADR 0002: seal-set flavours ─────────────────────────────────────
+
+
+def test_unsealed_path_is_resealed(tmp_path):
+    """Ledger line vanished, bytes intact: reseal restores the seal."""
+    repo = make_recovery(tmp_path)
+    live = make_live(tmp_path)
+    ledger = repo / "SHA256SUMS.txt"
+    kept = [ln for ln in ledger.read_text(encoding="utf-8").splitlines() if "sealed_tool.py" not in ln]
+    ledger.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
+    expect = frozenset({"tools/sealed_tool.py"})
+    report = ri.verify(repo, live, expect_seals=expect)
+    assert [f.flavour for f in report.findings] == ["unsealed_path"]
+    result = repair(report, repo, live)
+    assert any(f.flavour == "unsealed_path" for f in result.repaired)
+    assert ri.verify(repo, live, expect_seals=expect).findings == ()
+
+
+def test_undeclared_seal_is_refused(tmp_path):
+    """A ledger line outside the manifest: repair must not touch the ledger."""
+    repo = make_recovery(tmp_path)
+    live = make_live(tmp_path)
+    before = (repo / "SHA256SUMS.txt").read_bytes()
+    report = ri.verify(repo, live, expect_seals=frozenset())
+    assert [f.flavour for f in report.findings] == ["undeclared_seal"]
+    result = repair(report, repo, live)
+    assert any(f.flavour == "undeclared_seal" for f in result.refused)
+    assert (repo / "SHA256SUMS.txt").read_bytes() == before
