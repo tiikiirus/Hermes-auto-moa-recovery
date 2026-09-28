@@ -24,6 +24,11 @@ PROFILE_PATHS = {
     "fantrax": Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "profiles" / "fantrax" / "config.yaml",
     "aiqa": Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "profiles" / "aiqa" / "config.yaml",
     "auto-moa": Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "profiles" / "auto-moa" / "config.yaml",
+    # dynasty: профиль вне истории флота (создан 2026-09-20, активно
+    # используется: state.db/projects.db/auth.json). Его moa-блок уехал от
+    # канона (мёртвый longcat, нет space-bunny) — добавлен во флот 2026-09-25,
+    # чтобы дрейф ловился гейтами, а не обнаруживался вручную.
+    "dynasty": Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "profiles" / "dynasty" / "config.yaml",
 }
 EXPECTED_DEFAULTS = {
     # MoA-пресеты (для moa.default_preset и обратной совместимости с тестами,
@@ -33,6 +38,7 @@ EXPECTED_DEFAULTS = {
     "fantrax": "free_auto_moa",
     "aiqa": "free_auto_moa",
     "auto-moa": "free_auto_moa",
+    "dynasty": "free_auto_moa",
 }
 
 # Реальные модели-каркас для model.default (не MoA-пресеты!).
@@ -46,6 +52,7 @@ EXPECTED_MODEL_DEFAULTS = {
     "fantrax": "inclusionai/ling-3.0-flash-fin:free",
     "aiqa": "inclusionai/ling-3.0-flash-fin:free",
     "auto-moa": "inclusionai/ling-3.0-flash-fin:free",
+    "dynasty": "inclusionai/ling-3.0-flash-fin:free",
 }
 
 EXPECTED_MOA_PRESETS = EXPECTED_DEFAULTS  # алиас — это те же MoA-пресеты

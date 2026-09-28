@@ -4,7 +4,7 @@
 Replaces every occurrence of DEAD (aggregators, reference slots,
 fallback_providers) with REPLACEMENT across:
   - %LOCALAPPDATA%\\hermes\\config.yaml
-  - profiles aiqa / fantrax / mxstat config.yaml
+  - profiles aiqa / fantrax / mxstat / auto-moa / dynasty config.yaml
   - recovery backup auto-moa-moa-section.yaml
 
 Usage:
@@ -32,6 +32,7 @@ CONFIGS = [
     HERMES_DIR / "profiles/fantrax/config.yaml",
     HERMES_DIR / "profiles/mxstat/config.yaml",
     HERMES_DIR / "profiles/auto-moa/config.yaml",
+    HERMES_DIR / "profiles/dynasty/config.yaml",
 ]
 BACKUP_YAML = RECOVERY / "auto-moa-moa-section.yaml"
 

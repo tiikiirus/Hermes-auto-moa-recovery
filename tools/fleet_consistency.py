@@ -164,8 +164,10 @@ def _fleet_profile_paths(repo: Path | None = None) -> dict[str, Path]:
     # Recompute from env at call time, not import time, so tests can monkeypatch LOCALAPPDATA.
     base = Path(os.environ.get("LOCALAPPDATA", "")) / "hermes"
     out: dict[str, Path] = {}
-    # Import-time PROFILE_PATHS may be stale; rebuild the same set dynamically.
-    for name in ("default", "mxstat", "fantrax", "aiqa", "auto-moa"):
+    # Names come from moa_sync.PROFILE_PATHS (single fleet declaration); only the
+    # paths are rebuilt here — a second hardcoded name tuple is exactly how the
+    # dynasty profile stayed invisible to this gate until 2026-09-25.
+    for name in moa_sync.PROFILE_PATHS:
         if name == "default":
             out[name] = base / "config.yaml"
         else:

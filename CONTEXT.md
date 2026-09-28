@@ -15,7 +15,10 @@ never committed: the diff against upstream HEAD **is** the patch source.
 (the `default` profile) or `%LOCALAPPDATA%\hermes\profiles\<name>\config.yaml`.
 
 **Fleet** — the live profiles together: `default`, `mxstat`, `fantrax`, `aiqa`,
-`auto-moa`, plus `local-llm-lab`, which is a profile but *not* a MoA profile.
+`auto-moa`, `dynasty` (added 2026-09-25 ? an active MoA profile that existed
+outside the gate until its graph drifted), plus `local-llm-lab`, which is a
+profile but *not* a MoA profile. `moa_sync.PROFILE_PATHS` is the single
+declaration of the fleet; `fleet_consistency` derives its name set from it.
 
 **Canon** — `auto-moa-moa-section.yaml`: the canonical MoA graph, twelve presets.
 `profile_overrides` inside the canon express per-profile deviations, merged at sync

@@ -137,7 +137,7 @@ Free-модели Nous — ротация промо, не контракт: `te
 ```powershell
 # Проверить живость всех моделей схемы (ключ не нужен; вручную или по расписанию):
 check-moa-models.bat            # задачa AutoMoA-ModelCheck, ежедневно 09:00
-# Ротация выпавшей модели во всех 5 профилях + recovery yaml:
+# Ротация выпавшей модели во всех 6 профилях + recovery yaml:
 rotate-moa-model.bat tencent/hy3:free meituan/longcat-2.0:free
 # После ротации:
 hermes config check
@@ -228,7 +228,7 @@ glm-5.3 non-flash $0.90/$2.82). Дорогой `openai/gpt-5.6-luna-pro`
 ## Синхронизация и drift-check профилей
 
 Канонический MoA-граф хранится в `auto-moa-moa-section.yaml`. Скрипт
-`tools/moa_sync.py` проверяет и синхронизирует его со всеми пятью live-конфигами:
+`tools/moa_sync.py` проверяет и синхронизирует его со всеми шестью live-конфигами:
 
 ```bash
 python tools/moa_sync.py --check  # только проверка, exit 1 при drift
@@ -239,7 +239,7 @@ python tools/moa_sync.py --sync   # backup + атомарная синхрони
 не меняет профильные дефолты и пишет YAML в LF. Проверка контролирует provider,
 дефолтные пресеты, 12 пресетов, отсутствие legacy `auto_moa`, free/pay-модели и
 согласованность MoA-графа. `hermes-update.bat --check` теперь также падает при
-config drift, а `--repair` повторно синхронизирует пять профилей.
+config drift, а `--repair` повторно синхронизирует шесть профилей.
 
 ## Для всех профилей
 
